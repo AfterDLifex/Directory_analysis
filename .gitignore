@@ -1,0 +1,40 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.eggs/
+.venv/
+venv/
+env/
+
+# --- PyInstaller output (keep build/*.py and build/*.spec sources!) ---
+build/FolderAnalysisPro/
+build/FolderAnalysisPro.spec
+FolderAnalysisPro.spec
+dist/
+*.manifest
+
+# --- App artifacts (analysis output) ---
+folder_analysis/
+DASHBOARD.html
+REPORT.md
+DATA.json
+DATA.csv
+SUMMARY.txt
+
+# --- Local scratch / validation files ---
+_*.py
+_*.txt
+*_log.txt
+*.log
+
+# --- IDE / OS ---
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+desktop.ini
