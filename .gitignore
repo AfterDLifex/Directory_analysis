@@ -12,6 +12,7 @@ env/
 
 # --- PyInstaller output (keep build/*.py and build/*.spec sources!) ---
 build/FolderAnalysisPro/
+build/FolderAnalysisPro.stale-*/
 build/FolderAnalysisPro.spec
 FolderAnalysisPro.spec
 dist/

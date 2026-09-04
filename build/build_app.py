@@ -20,6 +20,7 @@ import platform
 import shutil
 import subprocess
 import sys
+import time
 
 APP_NAME = "FolderAnalysisPro"
 ENTRY_POINT = "main.py"
@@ -38,6 +39,47 @@ EXCLUDED = [
 ]
 
 
+def _remove_with_retry(path: str, attempts: int = 5, delay: float = 1.0) -> bool:
+    """Delete *path*, retrying briefly (antivirus may transiently lock files)."""
+    for i in range(attempts):
+        try:
+            if os.path.isdir(path):
+                shutil.rmtree(path)
+            else:
+                os.remove(path)
+            return True
+        except (PermissionError, OSError):
+            time.sleep(delay * (i + 1))
+    return False
+
+
+def _pre_clean(root: str) -> None:
+    """Remove stale build artefacts before PyInstaller runs.
+
+    On Windows, antivirus scanners can keep a just-written ``.exe`` locked for
+    a few seconds, which makes PyInstaller's own ``--clean`` step crash with
+    ``PermissionError``.  Deleting (or, as a last resort, renaming aside) the
+    artefacts up front avoids that.
+    """
+    stale = [
+        os.path.join(root, "build", APP_NAME),
+        os.path.join(root, "dist", APP_NAME + (".exe" if os.name == "nt" else "")),
+    ]
+    for path in stale:
+        if not os.path.exists(path):
+            continue
+        if _remove_with_retry(path):
+            print(f"Removed stale artefact: {path}")
+        else:
+            aside = path + ".stale-%d" % int(time.time())
+            try:
+                os.rename(path, aside)
+                print(f"Locked file moved aside: {path} -> {aside}")
+            except OSError as exc:
+                print(f"WARNING: could not clear {path} ({exc}); "
+                      "the build may fail on a locked file.")
+
+
 def build(onedir: bool = False, console: bool = False, keep_workpath: bool = False) -> int:
     """Invoke PyInstaller with the right flags for this platform."""
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -46,6 +88,8 @@ def build(onedir: bool = False, console: bool = False, keep_workpath: bool = Fal
     if shutil.which("pyinstaller") is None and _module_missing():
         print("PyInstaller is not installed.  Run:  pip install pyinstaller")
         return 1
+
+    _pre_clean(root)
 
     cmd = [sys.executable, "-m", "PyInstaller", "--noconfirm"]
     if not keep_workpath:
