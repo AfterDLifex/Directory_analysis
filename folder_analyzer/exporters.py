@@ -243,12 +243,15 @@ def _html_table(rows: List[Dict[str, Any]], cols: List[str], headers=None) -> st
 
 def _summary_cards(r: AnalysisResult) -> str:
     cards_data = [
-        ("TOTAL FILES", format_number(r.total_files), "Scanned objects", "#3b82f6"),
+        ("TOTAL FILES", format_number(r.total_files), f"{r.empty_files_count} empty files", "#3b82f6"),
         ("FOLDERS", format_number(r.total_directories), "Hierarchies", "#8b5cf6"),
         ("STORAGE", r.total_storage_formatted, "Total disk footprint", "#06b6d4"),
         ("AVG FILE SIZE", r.avg_file_size_formatted, "Calculated mean", "#10b981"),
+        ("STORAGE HEALTH", f"{r.storage_efficiency_score}/100", r.storage_health_label, "#22c55e" if r.storage_efficiency_score >= 80 else "#eab308" if r.storage_efficiency_score >= 60 else "#ef4444"),
     ]
-    if r.duplicate_groups:
+    if r.actionable_savings_bytes > 0:
+        cards_data.append(("POTENTIAL RECOVERY", r.actionable_savings_formatted, f"{len(r.duplicate_groups)} duplicate clusters", "#f97316"))
+    elif r.duplicate_groups:
         cards_data.append(("DUPLICATE WASTE", r.duplicate_wasted_formatted, f"{len(r.duplicate_groups)} duplicate clusters", "#ef4444"))
     
     html = []
@@ -523,6 +526,20 @@ def export_html(result: AnalysisResult, output_path: str, title: str = "Folder A
             )
         parts.append("</div>")
 
+    if r.actionable_recommendations:
+        parts.append('<div class="glass-panel" style="margin-bottom:26px"><h2>Actionable Optimization Recommendations</h2>')
+        for rec in r.actionable_recommendations:
+            badge_color = "#ef4444" if rec["type"] == "Critical" else "#f59e0b" if rec["type"] == "Warning" else "#3b82f6"
+            parts.append(
+                f'<div class="insight-item" style="border-left: 4px solid {badge_color};">'
+                f'<div style="font-weight:700;color:#ffffff;margin-bottom:4px;">'
+                f'<span style="background:{badge_color};color:#ffffff;padding:2px 8px;border-radius:4px;font-size:11px;margin-right:8px;">{_esc(rec["type"])}</span>'
+                f'{_esc(rec["title"])}</div>'
+                f'<div style="color:#cbd5e1;font-size:12px;">{_esc(rec["action"])}</div>'
+                f'</div>'
+            )
+        parts.append('</div>')
+
     parts.append('<div class="grid2">')
     parts.append('<div class="glass-panel"><h2>Key Insights</h2><ul class=insight-list>'
                  + "".join(f'<li class="insight-item">✓ {i}</li>' for i in r.key_insights) + "</ul></div>")
@@ -546,17 +563,20 @@ def export_markdown(result: AnalysisResult, output_path: str, title: str = "Fold
         f"> **Timestamp:** {r.generated_at} · **Scan Duration:** {r.scan_duration_seconds}s  ",
         f"> **Total Assets:** {format_number(r.total_files)} files across {format_number(r.total_directories)} directories ({r.total_storage_formatted})",
         "",
-        "## 📊 Executive Summary",
+        "## Executive Summary",
         "",
         "| Metric | Value | Status |",
         "|:-------|:------|:-------|",
-        f"| **Total Files** | {format_number(r.total_files)} | Indexed |",
+        f"| **Total Files** | {format_number(r.total_files)} | Indexed ({r.empty_files_count} empty files) |",
         f"| **Directories** | {format_number(r.total_directories)} | Scanned |",
         f"| **Total Disk Footprint** | **{r.total_storage_formatted}** | Complete |",
         f"| **Average File Size** | {r.avg_file_size_formatted} | Mean |",
+        f"| **Storage Health Score** | **{r.storage_efficiency_score}/100** | {r.storage_health_label} |",
     ]
-    if r.duplicate_groups:
-        md.append(f"| **Duplicate Waste** | ⚠️ **{r.duplicate_wasted_formatted}** | {len(r.duplicate_groups)} duplicate clusters |")
+    if r.actionable_savings_bytes > 0:
+        md.append(f"| **Potential Storage Recovery** | **{r.actionable_savings_formatted}** | {len(r.duplicate_groups)} duplicate clusters |")
+    elif r.duplicate_groups:
+        md.append(f"| **Duplicate Waste** | **{r.duplicate_wasted_formatted}** | {len(r.duplicate_groups)} duplicate clusters |")
     md.extend([
         "",
         "---",
@@ -620,11 +640,24 @@ def export_markdown(result: AnalysisResult, output_path: str, title: str = "Fold
             names = ", ".join(f"`{Path(fx['path']).name}`" for fx in g["files"][:3])
             md.append(f"| {g['size_formatted']} | {g['count']} | **{g['wasted_formatted']}** | {names} |")
 
+    if r.actionable_recommendations:
+        md.extend([
+            "",
+            "---",
+            "",
+            "## 🎯 Actionable Optimization Recommendations",
+            "",
+        ])
+        for rec in r.actionable_recommendations:
+            md.append(f"### [{rec['type']}] {rec['title']}")
+            md.append(f"> {rec['action']}")
+            md.append("")
+
     md.extend([
         "",
         "---",
         "",
-        "## 💡 Key Insights & Observations",
+        "## Key Insights & Observations",
         "",
     ])
     for ins in r.key_insights:
