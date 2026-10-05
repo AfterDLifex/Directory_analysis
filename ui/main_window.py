@@ -2,8 +2,10 @@
 Main window: command bar, sidebar navigation, stacked pages with fade
 transitions, toast notifications and keyboard shortcuts.
 
-Flow:  choose a folder -> Analyze -> a background ScanWorker streams
-progress -> pages are refreshed with animated transitions and counters.
+Now includes additional navigation:
+- File Viewer (preview any file in-app)
+- Timeline (temporal analytics)
+- Advanced Analytics (filename dupes, junk, deep nesting, long paths)
 """
 
 from __future__ import annotations
@@ -11,13 +13,13 @@ from __future__ import annotations
 import os
 
 from PySide6.QtCore import (
-    QEasingCurve, QPoint, QPropertyAnimation, QSize, QThread, QTimer, Qt,
+    QEasingCurve, QPropertyAnimation, QSize, QThread, QTimer, Qt,
 )
-from PySide6.QtGui import QAction, QKeySequence, QShortcut
+from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
-    QApplication, QFileDialog, QFrame, QGraphicsOpacityEffect, QHBoxLayout,
-    QLabel, QLineEdit, QListWidget, QListWidgetItem, QPushButton,
-    QProgressBar, QSizePolicy, QStackedWidget, QVBoxLayout, QWidget,
+    QFileDialog, QFrame, QGraphicsOpacityEffect, QHBoxLayout, QLabel,
+    QLineEdit, QListWidget, QListWidgetItem, QPushButton, QProgressBar,
+    QStackedWidget, QVBoxLayout, QWidget,
 )
 
 from folder_analyzer import __version__
@@ -25,24 +27,25 @@ from folder_analyzer.models import AnalysisConfig
 
 from .icons import get_svg_icon, get_svg_pixmap
 from .pages import (
-    ChartsPage, DuplicatesPage, ExportPage, FilesPage, InsightsPage,
-    OverviewPage,
+    AdvancedPage, ChartsPage, DuplicatesPage, ExportPage, FilesPage,
+    FileViewerPage, InsightsPage, OverviewPage, TimelinePage,
 )
 from .scan_worker import ScanWorker
 
 PAGE_DEFS = [
     ("Overview", "overview", OverviewPage),
     ("Visual Charts", "charts", ChartsPage),
+    ("Timeline", "clock", TimelinePage),
     ("File Explorer", "files", FilesPage),
+    ("File Viewer", "search", FileViewerPage),
     ("Duplicates", "duplicates", DuplicatesPage),
+    ("Advanced", "sliders", AdvancedPage),
     ("Deep Insights", "insights", InsightsPage),
     ("Export Data", "export", ExportPage),
 ]
 
 
 class AnimatedStackedWidget(QStackedWidget):
-    """QStackedWidget that transitions between pages with a clean fade-in."""
-
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._fade_anim: QPropertyAnimation | None = None
@@ -51,19 +54,15 @@ class AnimatedStackedWidget(QStackedWidget):
         if self._fade_anim is not None:
             self._fade_anim.stop()
             self._fade_anim = None
-
         curr = self.currentWidget()
         if curr is not None:
             curr.setGraphicsEffect(None)
-
         super().setCurrentIndex(index)
         target = self.widget(index)
         if not target:
             return
-
         effect = QGraphicsOpacityEffect(target)
         target.setGraphicsEffect(effect)
-
         anim = QPropertyAnimation(effect, b"opacity", self)
         anim.setDuration(220)
         anim.setStartValue(0.0)
@@ -80,8 +79,6 @@ class AnimatedStackedWidget(QStackedWidget):
 
 
 class Toast(QLabel):
-    """Small floating notification that auto-hides."""
-
     def __init__(self, parent: QWidget) -> None:
         super().__init__(parent)
         self.setObjectName("Toast")
@@ -113,7 +110,6 @@ class Toast(QLabel):
         anim.setEasingCurve(QEasingCurve.OutCubic)
         anim.start()
         self._anim = anim
-
         self._timer.start(ms)
 
     def _reposition(self) -> None:
@@ -140,8 +136,6 @@ class Toast(QLabel):
 
 
 class MainWindow(QWidget):
-    """Root application window with command bar + sidebar and animations."""
-
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle(f"Folder Analysis Pro v{__version__}")
@@ -185,6 +179,23 @@ class MainWindow(QWidget):
         self.nav.currentRowChanged.connect(self._on_nav_changed)
         self.nav.setCurrentRow(0)
 
+        # Wire "open in viewer" callbacks
+        self._wire_viewer_callbacks()
+
+    def _wire_viewer_callbacks(self) -> None:
+        viewer_page = self.pages[4]  # File Viewer
+        files_page = self.pages[3]   # File Explorer
+        advanced_page = self.pages[6]
+
+        def open_in_viewer(path: str) -> None:
+            viewer_page.open_path(path)
+            self._set_nav(4)
+
+        if isinstance(files_page, FilesPage):
+            files_page.set_viewer_callback(open_in_viewer)
+        if isinstance(advanced_page, AdvancedPage):
+            advanced_page.set_viewer_callback(open_in_viewer)
+
     def _build_top_bar(self) -> QWidget:
         bar = QWidget()
         bar.setObjectName("TopBar")
@@ -192,7 +203,6 @@ class MainWindow(QWidget):
         layout.setContentsMargins(20, 12, 20, 12)
         layout.setSpacing(14)
 
-        # Brand
         badge = QLabel("PRO")
         badge.setObjectName("AppLogoBadge")
         layout.addWidget(badge)
@@ -207,14 +217,12 @@ class MainWindow(QWidget):
         title_box.addWidget(sub)
         layout.addLayout(title_box)
 
-        # Separator
         sep1 = QFrame()
         sep1.setObjectName("TopBarSeparator")
         sep1.setFrameShape(QFrame.VLine)
         sep1.setFixedHeight(34)
         layout.addWidget(sep1)
 
-        # Path input
         self.path_edit = QLineEdit()
         self.path_edit.setPlaceholderText("Select or drop a folder path to analyze…")
         self.path_edit.returnPressed.connect(self.start_scan)
@@ -243,14 +251,12 @@ class MainWindow(QWidget):
         self.cancel_btn.setToolTip("Cancel the running scan  (Esc)")
         layout.addWidget(self.cancel_btn)
 
-        # Separator
         sep2 = QFrame()
         sep2.setObjectName("TopBarSeparator")
         sep2.setFrameShape(QFrame.VLine)
         sep2.setFixedHeight(34)
         layout.addWidget(sep2)
 
-        # Quick icon buttons
         self.export_btn_top = self._icon_button("export", "#cbd5e1",
                                                 "Jump to Export  (Ctrl+E)")
         self.export_btn_top.clicked.connect(lambda: self._goto_page("export"))
@@ -294,7 +300,6 @@ class MainWindow(QWidget):
             self.nav.addItem(item)
         lay.addWidget(self.nav)
 
-        # Quick stats in sidebar
         lay.addStretch(1)
         stats = QFrame()
         stats.setObjectName("SidebarStat")
@@ -374,12 +379,8 @@ class MainWindow(QWidget):
         sc("Ctrl+R", self.start_scan)
         sc("Esc", self.cancel_scan)
         sc("Ctrl+E", lambda: self._goto_page("export"))
-        sc("Ctrl+1", lambda: self._set_nav(0))
-        sc("Ctrl+2", lambda: self._set_nav(1))
-        sc("Ctrl+3", lambda: self._set_nav(2))
-        sc("Ctrl+4", lambda: self._set_nav(3))
-        sc("Ctrl+5", lambda: self._set_nav(4))
-        sc("Ctrl+6", lambda: self._set_nav(5))
+        for i in range(len(PAGE_DEFS)):
+            sc(f"Ctrl+{i + 1}", lambda idx=i: self._set_nav(idx))
         sc("?", self._show_shortcuts)
 
     # -- navigation helpers --------------------------------------------------
@@ -425,6 +426,9 @@ class MainWindow(QWidget):
             tree_max_depth=3,
             largest_n=50,
             oldest_n=50,
+            recent_n=50,
+            deep_depth_threshold=6,
+            junk_min_age_days=30,
         )
         self._set_busy(True, f"Indexing and analyzing {path} …")
         self._set_status("running", "search", "Scanning…")
@@ -470,13 +474,11 @@ class MainWindow(QWidget):
         self._set_status("ok", "check", summary)
         self.status_meta.setText(f"{len(result.duplicate_groups)} dup. groups")
 
-        # Sidebar quick stats
         self.sidebar_total.setText(
             f"{result.total_files:,} / {result.total_storage_formatted}")
         self.sidebar_waste.setText(
             result.duplicate_wasted_formatted if result.duplicate_groups else "None")
 
-        # Toast
         if result.duplicate_groups and result.actionable_savings_bytes > 0:
             self._toast.show_message(
                 f"Scan complete · {result.actionable_savings_formatted} recoverable",
@@ -517,7 +519,8 @@ class MainWindow(QWidget):
 
     def _show_shortcuts(self) -> None:
         self._toast.show_message(
-            "Ctrl+O browse · F5 scan · Esc stop · Ctrl+E export · Ctrl+1-6 pages",
+            "Ctrl+O browse · F5 scan · Esc stop · Ctrl+E export · "
+            "Ctrl+1-9 pages · ? help",
             "info", ms=4200)
 
     def _teardown_worker(self) -> None:

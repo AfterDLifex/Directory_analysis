@@ -2,8 +2,10 @@
 Page widgets for the main window with premium glassmorphism, SVG vector icons,
 industrial-grade KPI cards, filterable tables, and severity-driven insights.
 
-Every page exposes ``set_result(result)`` so the main window can push a fresh
-:class:`AnalysisResult` into it after each scan.
+Now includes:
+- FileViewerPage  — in-app file preview (text / image / hex)
+- TimelinePage    — temporal analytics (month / day-of-week / hour)
+- AdvancedPage    — filename duplicates, junk, deep nesting, long paths
 """
 
 from __future__ import annotations
@@ -16,14 +18,15 @@ from PySide6.QtCore import (
 )
 from PySide6.QtGui import QColor, QFont, QIcon
 from PySide6.QtWidgets import (
-    QAbstractItemView, QCheckBox, QFileDialog, QFrame, QGraphicsOpacityEffect,
-    QGridLayout, QGroupBox, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
-    QListWidget, QListWidgetItem, QPushButton, QScrollArea, QSizePolicy,
-    QTableWidget, QTableWidgetItem, QTabWidget, QTreeWidget, QTreeWidgetItem,
-    QVBoxLayout, QWidget,
+    QAbstractItemView, QCheckBox, QComboBox, QFileDialog, QFrame,
+    QGraphicsOpacityEffect, QGridLayout, QGroupBox, QHBoxLayout,
+    QHeaderView, QLabel, QLineEdit, QListWidget, QListWidgetItem, QPushButton,
+    QScrollArea, QSizePolicy, QSplitter, QTableWidget, QTableWidgetItem,
+    QTabWidget, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
 )
 
 from folder_analyzer.models import AnalysisResult
+from .file_viewer import FileViewer
 from .icons import get_category_svg_icon, get_svg_icon, get_svg_pixmap
 
 
@@ -44,13 +47,11 @@ class StatCard(QFrame):
             "cyan": "#00d2ff", "blue": "#4f8cff", "violet": "#8b5cf6",
             "green": "#22c55e", "amber": "#f59e0b", "red": "#ef4444",
         }.get(accent, "#4f8cff")
-        self._icon_name = icon_name
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(18, 14, 18, 14)
         outer.setSpacing(8)
 
-        # Top row: icon badge + title + trend
         top = QHBoxLayout()
         top.setSpacing(10)
 
@@ -60,9 +61,8 @@ class StatCard(QFrame):
         self._icon_lbl.setPixmap(get_svg_pixmap(icon_name, size=18,
                                                 color=self._accent_color))
         self._icon_lbl.setStyleSheet(
-            f"background: rgba(255,255,255,0.05); border-radius: 8px; "
-            f"border: 1px solid rgba(255,255,255,0.06);"
-        )
+            "background: rgba(255,255,255,0.05); border-radius: 8px; "
+            "border: 1px solid rgba(255,255,255,0.06);")
         top.addWidget(self._icon_lbl)
 
         title_lbl = QLabel(title.upper())
@@ -77,13 +77,11 @@ class StatCard(QFrame):
 
         outer.addLayout(top)
 
-        # Value
         self._value = QLabel(value)
         self._value.setObjectName("StatCardValue")
         self._value.setTextInteractionFlags(Qt.TextSelectableByMouse)
         outer.addWidget(self._value)
 
-        # Subtitle
         self._sub = QLabel(subtitle)
         self._sub.setObjectName("StatCardSub")
         self._sub.setWordWrap(True)
@@ -91,14 +89,12 @@ class StatCard(QFrame):
 
         outer.addStretch(1)
 
-        # Pulse-in effect on update
         self._effect = QGraphicsOpacityEffect(self)
         self._effect.setOpacity(1.0)
         self.setGraphicsEffect(self._effect)
 
     def set_value(self, value: str, subtitle: Optional[str] = None,
                   trend: Optional[str] = None) -> None:
-        """Update value (with fade-in pulse) and optional trend chip."""
         self._value.setText(value)
         if subtitle is not None:
             self._sub.setText(subtitle)
@@ -164,9 +160,6 @@ class Panel(QFrame):
         self.body.setSpacing(10)
         outer.addLayout(self.body, 1)
 
-    def add_header_widget(self, widget: QWidget) -> None:
-        self.header_actions.addWidget(widget)
-
     def set_badge(self, text: str) -> QLabel:
         badge = QLabel(text)
         badge.setObjectName("PanelBadge")
@@ -175,7 +168,6 @@ class Panel(QFrame):
 
 
 def make_table(headers: List[str]) -> QTableWidget:
-    """Create a read-only glass table with sortable headers."""
     table = QTableWidget(0, len(headers))
     table.setHorizontalHeaderLabels(headers)
     table.verticalHeader().setVisible(False)
@@ -193,7 +185,6 @@ def make_table(headers: List[str]) -> QTableWidget:
 
 
 def fill_table(table: QTableWidget, rows: List[List[Any]]) -> None:
-    """Replace table contents with rows (sorting temporarily disabled)."""
     table.setSortingEnabled(False)
     table.setRowCount(0)
     for row in rows:
@@ -213,8 +204,6 @@ def fill_table(table: QTableWidget, rows: List[List[Any]]) -> None:
 
 
 class FilterBar(QWidget):
-    """Small search field with icon used above tables."""
-
     def __init__(self, table: QTableWidget, placeholder: str = "Filter rows…",
                  parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -255,8 +244,6 @@ class FilterBar(QWidget):
 
 
 class EmptyState(QWidget):
-    """Big-icon centered empty state for charts/tables with no data."""
-
     def __init__(self, icon_name: str = "search",
                  title: str = "Nothing here yet",
                  body: str = "Run a scan to populate this view.",
@@ -289,15 +276,12 @@ class EmptyState(QWidget):
 # ===========================================================================
 
 class OverviewPage(QWidget):
-    """Headline metrics + storage health + actionable recommendations + file types."""
-
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(14)
 
-        # KPI Row 1: three primary cards
         row1 = QHBoxLayout()
         row1.setSpacing(12)
         self.card_files = StatCard("Files Indexed", "—", "0-byte: —",
@@ -310,7 +294,6 @@ class OverviewPage(QWidget):
             row1.addWidget(c, 1)
         root.addLayout(row1)
 
-        # KPI Row 2: secondary cards
         row2 = QHBoxLayout()
         row2.setSpacing(12)
         self.card_avg = StatCard("Average File", "—", "Mean size",
@@ -323,7 +306,6 @@ class OverviewPage(QWidget):
             row2.addWidget(c, 1)
         root.addLayout(row2)
 
-        # Recommendation banner
         self.action_box = QFrame()
         self.action_box.setObjectName("InsightCard")
         act_lay = QHBoxLayout(self.action_box)
@@ -340,7 +322,6 @@ class OverviewPage(QWidget):
         act_lay.addWidget(self.action_text, 1)
         root.addWidget(self.action_box)
 
-        # File-type panel
         panel = Panel("Storage Distribution by File Extension",
                       icon_name="files",
                       subtitle="Ranked by aggregate size")
@@ -350,7 +331,6 @@ class OverviewPage(QWidget):
             ["Extension", "Category", "Files", "Size", "% of storage"])
         panel.body.addWidget(FilterBar(self.type_table))
         panel.body.addWidget(self.type_table, 1)
-
         root.addWidget(panel, 1)
 
         self._empty_state()
@@ -394,8 +374,8 @@ class OverviewPage(QWidget):
                 f"{top['title']} — {top['action']}")
         else:
             self.action_text.setText(
-                "<b>Optimal Layout:</b> Directory storage is well organized with "
-                "no detected duplicate waste.")
+                "<b>Optimal Layout:</b> Directory storage is well organized "
+                "with no detected duplicate waste.")
 
         rows = []
         for d in result.file_types:
@@ -413,11 +393,10 @@ class OverviewPage(QWidget):
 
 
 # ===========================================================================
-# Charts page (QtCharts)
+# Charts page
 # ===========================================================================
 
-def _donut(entries: List[Dict[str, Any]], value_key: str = "size",
-           label_key: str = "label", max_slices: int = 8):
+def _donut(entries, value_key="size", label_key="label", max_slices=8):
     from PySide6.QtCore import QMargins
     from PySide6.QtGui import QColor
     from PySide6.QtCharts import QChart, QPieSeries
@@ -453,9 +432,8 @@ def _donut(entries: List[Dict[str, Any]], value_key: str = "size",
     return chart
 
 
-def _bars(entries: List[Dict[str, Any]], value_key: str = "size",
-          label_key: str = "name", color: str = "#4f8cff"):
-    from PySide6.QtGui import QColor, QFont
+def _bars(entries, value_key="size", label_key="name", color="#4f8cff"):
+    from PySide6.QtGui import QColor
     from PySide6.QtCharts import (
         QBarCategoryAxis, QBarSeries, QBarSet, QChart, QValueAxis,
     )
@@ -496,8 +474,6 @@ def _bars(entries: List[Dict[str, Any]], value_key: str = "size",
 
 
 class ChartsPage(QWidget):
-    """Live visual analytics: types, categories, directory hotspots, age & size."""
-
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         from PySide6.QtCharts import QChartView
@@ -507,7 +483,6 @@ class ChartsPage(QWidget):
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
         scroll.setStyleSheet("QScrollArea { background: transparent; }")
-
         inner = QWidget()
         scroll.setWidget(inner)
 
@@ -530,32 +505,27 @@ class ChartsPage(QWidget):
         self._view_dirs = _view()
         self._view_age = _view()
         self._view_size = _view()
+        self._view_timeline = _view()
 
-        panel_type = Panel("Storage by File Type", "files",
-                           "Top 8 extensions, size-weighted")
-        panel_type.body.addWidget(self._view_type)
+        p1 = Panel("Storage by File Type", "files", "Top 8 extensions")
+        p1.body.addWidget(self._view_type)
+        p2 = Panel("Storage by Category", "layers", "Grouped by media class")
+        p2.body.addWidget(self._view_cat)
+        p3 = Panel("Top Directories", "folder", "Highest aggregate footprint")
+        p3.body.addWidget(self._view_dirs)
+        p4 = Panel("File Age Distribution", "clock", "Recency buckets")
+        p4.body.addWidget(self._view_age)
+        p5 = Panel("File Size Distribution", "activity", "Size class breakdown")
+        p5.body.addWidget(self._view_size)
+        p6 = Panel("Modified Timeline", "calendar", "Files by month (last 24)")
+        p6.body.addWidget(self._view_timeline)
 
-        panel_cat = Panel("Storage by Category", "layers",
-                          "Grouped by media class")
-        panel_cat.body.addWidget(self._view_cat)
-
-        panel_dirs = Panel("Top Directories", "folder",
-                           "Highest aggregate footprint")
-        panel_dirs.body.addWidget(self._view_dirs)
-
-        panel_age = Panel("File Age Distribution", "clock",
-                          "Recency buckets")
-        panel_age.body.addWidget(self._view_age)
-
-        panel_size = Panel("File Size Distribution", "activity",
-                           "Size class breakdown")
-        panel_size.body.addWidget(self._view_size)
-
-        root.addWidget(panel_type, 0, 0)
-        root.addWidget(panel_cat, 0, 1)
-        root.addWidget(panel_dirs, 1, 0, 1, 2)
-        root.addWidget(panel_age, 2, 0)
-        root.addWidget(panel_size, 2, 1)
+        root.addWidget(p1, 0, 0)
+        root.addWidget(p2, 0, 1)
+        root.addWidget(p3, 1, 0, 1, 2)
+        root.addWidget(p4, 2, 0)
+        root.addWidget(p5, 2, 1)
+        root.addWidget(p6, 3, 0, 1, 2)
         root.setRowStretch(1, 2)
         root.setColumnStretch(0, 1)
         root.setColumnStretch(1, 1)
@@ -569,33 +539,37 @@ class ChartsPage(QWidget):
             _bars(result.age_distribution, "size", "category", "#06b6d4"))
         self._view_size.setChart(
             _bars(result.size_distribution, "count", "range", "#a855f7"))
+        self._view_timeline.setChart(
+            _bars(result.modified_timeline, "size", "month", "#8b5cf6"))
 
 
 # ===========================================================================
-# Files page
+# File Explorer page  (largest / oldest / recent / empty)
 # ===========================================================================
 
 class FilesPage(QWidget):
-    """Largest files, oldest files, and 0-byte orphan files in tabbed tables."""
-
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
+        self._viewer_callback: Optional[Callable[[str], None]] = None
+
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(12)
 
         panel = Panel("File Explorer", "files",
-                      "Deep dive into the largest, oldest, and empty files")
+                      "Double-click a row to preview it in the File Viewer")
         self.file_badge = panel.set_badge("0 files")
 
         tabs = QTabWidget()
         self.table_largest = make_table(["Name", "Location", "Type", "Size", "Modified"])
         self.table_oldest = make_table(["Name", "Location", "Type", "Size", "Modified"])
+        self.table_recent = make_table(["Name", "Location", "Type", "Size", "Modified"])
         self.table_empty = make_table(["Name", "Location", "Type", "Size", "Modified"])
 
-        for name, table in (("Largest Files", self.table_largest),
-                            ("Oldest Files", self.table_oldest),
-                            ("0-Byte Files", self.table_empty)):
+        for name, table in (("Largest", self.table_largest),
+                            ("Oldest", self.table_oldest),
+                            ("Recent", self.table_recent),
+                            ("0-Byte", self.table_empty)):
             wrap = QWidget()
             wl = QVBoxLayout(wrap)
             wl.setContentsMargins(0, 6, 0, 0)
@@ -603,9 +577,26 @@ class FilesPage(QWidget):
             wl.addWidget(FilterBar(table))
             wl.addWidget(table, 1)
             tabs.addTab(wrap, name)
+            table.itemDoubleClicked.connect(self._on_item_double_click)
 
         panel.body.addWidget(tabs, 1)
         root.addWidget(panel, 1)
+
+    def set_viewer_callback(self, cb: Callable[[str], None]) -> None:
+        self._viewer_callback = cb
+
+    def _on_item_double_click(self, item: QTableWidgetItem) -> None:
+        if self._viewer_callback is None:
+            return
+        table = item.tableWidget()
+        row = item.row()
+        # Column 0 holds the name; but the path is stored in the item's UserRole
+        name_item = table.item(row, 0)
+        if name_item is None:
+            return
+        path = name_item.data(Qt.UserRole)
+        if path:
+            self._viewer_callback(path)
 
     def set_result(self, result: AnalysisResult) -> None:
         def build(records):
@@ -616,16 +607,448 @@ class FilesPage(QWidget):
                 parent = r.get("parent", "") if isinstance(r, dict) else r.parent
                 size_str = r.get("size_formatted", "") if isinstance(r, dict) else r.size_formatted
                 mod_str = r.get("modified_formatted", "") if isinstance(r, dict) else r.modified_formatted
+                path = r.get("path", "") if isinstance(r, dict) else getattr(r, "path", "")
                 icon = get_category_svg_icon(cat, size=16)
                 name_item = QTableWidgetItem(icon, "  " + name)
+                if path:
+                    name_item.setData(Qt.UserRole, path)
                 out.append([name_item, parent, cat, size_str, mod_str])
             return out
 
         fill_table(self.table_largest, build(result.largest_files))
         fill_table(self.table_oldest, build(result.oldest_files))
+        fill_table(self.table_recent, build(getattr(result, "recent_files", [])))
         fill_table(self.table_empty, build(result.empty_files_list))
         self.file_badge.setText(
-            f"{len(result.largest_files) + len(result.oldest_files) + len(result.empty_files_list)} rows")
+            f"{len(result.largest_files) + len(result.oldest_files) + "
+              f"len(result.recent_files) + len(result.empty_files_list)} rows")
+
+
+# ===========================================================================
+# File Viewer page
+# ===========================================================================
+
+class FileViewerPage(QWidget):
+    """Browse the scan tree on the left, preview the selected file on the right."""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._result: AnalysisResult | None = None
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(12)
+
+        panel = Panel("File Viewer", "files",
+                      "Browse files from the scan and preview them in-app")
+        self.viewer_badge = panel.set_badge("no scan")
+
+        splitter = QSplitter(Qt.Horizontal)
+        splitter.setChildrenCollapsible(False)
+
+        # Left — tree
+        left = QWidget()
+        ll = QVBoxLayout(left)
+        ll.setContentsMargins(0, 0, 0, 0)
+        ll.setSpacing(8)
+
+        self.search = QLineEdit()
+        self.search.setPlaceholderText("Filter files by name…")
+        self.search.setClearButtonEnabled(True)
+        self.search.textChanged.connect(self._apply_filter)
+        ll.addWidget(self.search)
+
+        self.tree = QTreeWidget()
+        self.tree.setHeaderLabels(["File", "Size"])
+        self.tree.setColumnWidth(0, 240)
+        self.tree.setAlternatingRowColors(True)
+        self.tree.setUniformRowHeights(True)
+        self.tree.itemSelectionChanged.connect(self._on_tree_selection)
+        ll.addWidget(self.tree, 1)
+
+        splitter.addWidget(left)
+
+        # Right — viewer
+        self.viewer = FileViewer()
+        splitter.addWidget(self.viewer)
+        splitter.setStretchFactor(0, 1)
+        splitter.setStretchFactor(1, 3)
+        splitter.setSizes([320, 900])
+
+        panel.body.addWidget(splitter, 1)
+        root.addWidget(panel, 1)
+
+    # ------------------------------------------------------------------
+    def open_path(self, path: str) -> None:
+        """Called by other pages when they want to jump straight to a file."""
+        self.viewer.load_file(path)
+        self._select_path_in_tree(path)
+
+    def set_result(self, result: AnalysisResult) -> None:
+        self._result = result
+        self._rebuild_tree(result)
+        self.viewer_badge.setText(f"{result.total_files:,} files")
+
+    # ------------------------------------------------------------------
+    def _rebuild_tree(self, result: AnalysisResult) -> None:
+        self.tree.clear()
+        if not result.has_data:
+            return
+
+        root_path = result.root_path
+        root_item = QTreeWidgetItem([result.root_name + "/", ""])
+        root_item.setIcon(0, get_svg_icon("folder", color="#93c5fd", size=16))
+        self.tree.addTopLevelItem(root_item)
+
+        # Group by parent (single level to keep the tree light)
+        by_parent: Dict[str, List[Dict]] = {}
+        for rec in (result.largest_files + result.oldest_files
+                    + getattr(result, "recent_files", []) + result.empty_files_list):
+            parent = rec.get("parent_full") or rec.get("path", "")
+            by_parent.setdefault(parent, []).append(rec)
+
+        # Build a shallow tree: root -> parent dirs -> files
+        for parent_path, recs in sorted(by_parent.items()):
+            if not parent_path:
+                continue
+            short = os.path.relpath(parent_path, root_path) if parent_path else "."
+            dir_item = QTreeWidgetItem([short, ""])
+            dir_item.setIcon(0, get_svg_icon("folder", color="#c4b5fd", size=16))
+            root_item.addChild(dir_item)
+
+            for rec in recs:
+                size_str = rec.get("size_formatted", "")
+                name = rec.get("name", "?")
+                cat = rec.get("type", "Other")
+                file_item = QTreeWidgetItem([name, size_str])
+                file_item.setIcon(0, get_category_svg_icon(cat, size=14))
+                file_item.setData(0, Qt.UserRole, rec.get("path", ""))
+                dir_item.addChild(file_item)
+
+        root_item.setExpanded(True)
+
+    def _apply_filter(self, text: str) -> None:
+        needle = text.lower().strip()
+
+        def visit(item: QTreeWidgetItem) -> bool:
+            """Return True if item or any descendant matches."""
+            if not needle:
+                item.setHidden(False)
+                child_match = False
+                for i in range(item.childCount()):
+                    if visit(item.child(i)):
+                        child_match = True
+                return True
+            match = needle in item.text(0).lower()
+            child_match = False
+            for i in range(item.childCount()):
+                if visit(item.child(i)):
+                    child_match = True
+            show = match or child_match
+            item.setHidden(not show)
+            if child_match:
+                item.setExpanded(True)
+            return show
+
+        for i in range(self.tree.topLevelItemCount()):
+            visit(self.tree.topLevelItem(i))
+
+    def _on_tree_selection(self) -> None:
+        items = self.tree.selectedItems()
+        if not items:
+            return
+        item = items[0]
+        path = item.data(0, Qt.UserRole)
+        if path:
+            self.viewer.load_file(path)
+
+    def _select_path_in_tree(self, path: str) -> None:
+        """Expand the tree and highlight the given path."""
+        for i in range(self.tree.topLevelItemCount()):
+            top = self.tree.topLevelItem(i)
+            found = self._find_child_by_path(top, path)
+            if found:
+                self.tree.setCurrentItem(found)
+                self.tree.scrollToItem(found)
+                return
+
+    def _find_child_by_path(self, item: QTreeWidgetItem,
+                            path: str) -> Optional[QTreeWidgetItem]:
+        if item.data(0, Qt.UserRole) == path:
+            return item
+        for i in range(item.childCount()):
+            found = self._find_child_by_path(item.child(i), path)
+            if found:
+                item.setExpanded(True)
+                return found
+        return None
+
+
+# ===========================================================================
+# Timeline page
+# ===========================================================================
+
+class TimelinePage(QWidget):
+    """Temporal analytics — month, day of week, hour of day."""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        from PySide6.QtCharts import QChartView
+        from PySide6.QtGui import QPainter
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setStyleSheet("QScrollArea { background: transparent; }")
+        inner = QWidget()
+        scroll.setWidget(inner)
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.addWidget(scroll)
+
+        root = QVBoxLayout(inner)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(14)
+
+        def _view():
+            v = QChartView()
+            v.setRenderHint(QPainter.RenderHint.Antialiasing)
+            v.setMinimumHeight(240)
+            return v
+
+        self._view_month = _view()
+        self._view_dow = _view()
+        self._view_hour = _view()
+
+        p1 = Panel("Files Modified per Month", "calendar",
+                   "Storage weight by month (last 24)")
+        p1.body.addWidget(self._view_month)
+        p2 = Panel("Files Modified per Weekday", "clock",
+                   "Aggregate storage by day of week")
+        p2.body.addWidget(self._view_dow)
+        p3 = Panel("Files Modified per Hour", "activity",
+                   "Storage weight by hour of day")
+        p3.body.addWidget(self._view_hour)
+
+        root.addWidget(p1)
+        root.addWidget(p2)
+        root.addWidget(p3)
+
+    def set_result(self, result: AnalysisResult) -> None:
+        self._view_month.setChart(
+            _bars(result.modified_timeline, "size", "month", "#8b5cf6"))
+        self._view_dow.setChart(
+            _bars(result.day_of_week_distribution, "size", "day", "#06b6d4"))
+        self._view_hour.setChart(
+            _bars(result.hour_of_day_distribution, "size", "hour", "#a855f7"))
+
+
+# ===========================================================================
+# Advanced Analytics page
+# ===========================================================================
+
+class AdvancedPage(QWidget):
+    """Filename duplicates, junk files, deep nesting, long paths, MIME summary."""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._viewer_callback: Optional[Callable[[str], None]] = None
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setStyleSheet("QScrollArea { background: transparent; }")
+        inner = QWidget()
+        scroll.setWidget(inner)
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.addWidget(scroll)
+
+        root = QVBoxLayout(inner)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(14)
+
+        # KPI row
+        kpi = QHBoxLayout()
+        kpi.setSpacing(12)
+        self.card_junk = StatCard("Junk Candidates", "—", "Temp / cache files",
+                                  icon_name="trash", accent="red")
+        self.card_name_dupes = StatCard("Filename Collisions", "—",
+                                        "Same name, diff folder",
+                                        icon_name="copy", accent="amber")
+        self.card_deep = StatCard("Deep Files", "—", "Nested > threshold",
+                                  icon_name="layers", accent="violet")
+        self.card_long = StatCard("Long Paths", "—", "> 240 chars",
+                                  icon_name="alert-circle", accent="amber")
+        for c in (self.card_junk, self.card_name_dupes,
+                  self.card_deep, self.card_long):
+            kpi.addWidget(c, 1)
+        root.addLayout(kpi)
+
+        # Filename duplicates
+        p1 = Panel("Filename Collisions", "copy",
+                   "Same filename found in multiple directories")
+        self.dup_badge = p1.set_badge("0")
+        self.dup_table = make_table(["Filename", "Copies", "Total Size", "Example Path"])
+        p1.body.addWidget(FilterBar(self.dup_table))
+        p1.body.addWidget(self.dup_table, 1)
+        self._wire_viewer(self.dup_table, path_col=3)
+        root.addWidget(p1)
+
+        # Junk candidates
+        p2 = Panel("Junk / Temp / Cache Candidates", "trash",
+                   "Old temporary or backup files safe to review")
+        self.junk_badge = p2.set_badge("0")
+        self.junk_table = make_table(
+            ["Name", "Location", "Type", "Size", "Age (days)"])
+        p2.body.addWidget(FilterBar(self.junk_table))
+        p2.body.addWidget(self.junk_table, 1)
+        self._wire_viewer(self.junk_table, path_col=1)
+        root.addWidget(p2)
+
+        # Deep + long paths side by side
+        two = QHBoxLayout()
+        two.setSpacing(14)
+
+        p3 = Panel("Deeply Nested Files", "layers",
+                   "Beyond the configured depth threshold")
+        self.deep_badge = p3.set_badge("0")
+        self.deep_table = make_table(["Name", "Location", "Depth", "Size"])
+        p3.body.addWidget(FilterBar(self.deep_table))
+        p3.body.addWidget(self.deep_table, 1)
+        two.addWidget(p3)
+
+        p4 = Panel("Long Paths", "alert-circle",
+                   "Paths that exceed safe limits")
+        self.long_badge = p4.set_badge("0")
+        self.long_table = make_table(["Name", "Path Length", "Location"])
+        p4.body.addWidget(FilterBar(self.long_table))
+        p4.body.addWidget(self.long_table, 1)
+        two.addWidget(p4)
+
+        root.addLayout(two)
+
+        # MIME + extensionless side by side
+        two2 = QHBoxLayout()
+        two2.setSpacing(14)
+
+        p5 = Panel("Rough MIME Summary", "database",
+                   "Distribution by top-level media type")
+        self.mime_table = make_table(["MIME", "Files", "Size", "% Share"])
+        p5.body.addWidget(self.mime_table, 1)
+        two2.addWidget(p5)
+
+        p6 = Panel("Files Without Extension", "files",
+                   "May be scripts, configs or unknown binaries")
+        self.extless_badge = p6.set_badge("0")
+        self.extless_table = make_table(["Name", "Location", "Size"])
+        p6.body.addWidget(FilterBar(self.extless_table))
+        p6.body.addWidget(self.extless_table, 1)
+        two2.addWidget(p6)
+
+        root.addLayout(two2)
+
+    def set_viewer_callback(self, cb: Callable[[str], None]) -> None:
+        self._viewer_callback = cb
+
+    # ------------------------------------------------------------------
+    def _wire_viewer(self, table: QTableWidget, path_col: int) -> None:
+        """Double-click in a table to open the underlying file in the viewer."""
+        def on_dc(item: QTableWidgetItem) -> None:
+            if self._viewer_callback is None:
+                return
+            row = item.row()
+            name_item = table.item(row, 0)
+            if name_item is None:
+                return
+            path = name_item.data(Qt.UserRole)
+            if path:
+                self._viewer_callback(path)
+        table.itemDoubleClicked.connect(on_dc)
+
+    # ------------------------------------------------------------------
+    def set_result(self, result: AnalysisResult) -> None:
+        # KPI values
+        junk_size = sum(j["size"] for j in result.potential_junk)
+        from folder_analyzer.formats import format_size
+        self.card_junk.set_value(
+            f"{len(result.potential_junk):,}",
+            f"{format_size(junk_size)} recoverable")
+        self.card_name_dupes.set_value(f"{len(result.filename_duplicates):,}")
+        self.card_deep.set_value(f"{len(result.deep_files):,}")
+        self.card_long.set_value(f"{len(result.long_path_files):,}")
+
+        # Filename collisions
+        rows = []
+        for d in result.filename_duplicates[:200]:
+            example = d["files"][0]["parent"] if d.get("files") else ""
+            name_item = QTableWidgetItem(d["name"])
+            if d.get("files"):
+                name_item.setData(Qt.UserRole, d["files"][0].get("path", ""))
+            rows.append([
+                name_item,
+                f"{d['count']}",
+                d["size_formatted"],
+                example,
+            ])
+        fill_table(self.dup_table, rows)
+        self.dup_badge.setText(f"{len(result.filename_duplicates)}")
+
+        # Junk
+        rows = []
+        for j in result.potential_junk:
+            name_item = QTableWidgetItem(j["name"])
+            name_item.setData(Qt.UserRole, j.get("path", ""))
+            rows.append([
+                name_item,
+                j.get("parent", ""),
+                j.get("type", "Other"),
+                j["size_formatted"],
+                f"{j.get('age_days', 0):,}",
+            ])
+        fill_table(self.junk_table, rows)
+        self.junk_badge.setText(f"{len(result.potential_junk)}")
+
+        # Deep
+        rows = []
+        for d in result.deep_files:
+            name_item = QTableWidgetItem(d["name"])
+            name_item.setData(Qt.UserRole, d.get("path", ""))
+            rows.append([
+                name_item,
+                d.get("parent", ""),
+                f"{d.get('depth', 0)}",
+                d["size_formatted"],
+            ])
+        fill_table(self.deep_table, rows)
+        self.deep_badge.setText(f"{len(result.deep_files)}")
+
+        # Long paths
+        rows = []
+        for d in result.long_path_files:
+            rows.append([
+                d["name"],
+                f"{d.get('path_len', 0)}",
+                d.get("parent", ""),
+            ])
+        fill_table(self.long_table, rows)
+        self.long_badge.setText(f"{len(result.long_path_files)}")
+
+        # MIME
+        rows = [[m["mime"], f"{m['files']:,}", m["size_formatted"],
+                 f"{m['percentage']}%"] for m in result.mime_summary]
+        fill_table(self.mime_table, rows)
+
+        # Extensionless
+        rows = []
+        for e in result.extensionless_files:
+            name_item = QTableWidgetItem(e["name"])
+            name_item.setData(Qt.UserRole, e.get("path", ""))
+            rows.append([name_item, e.get("parent", ""), e["size_formatted"]])
+        fill_table(self.extless_table, rows)
+        self.extless_badge.setText(f"{len(result.extensionless_files)}")
 
 
 # ===========================================================================
@@ -633,8 +1056,6 @@ class FilesPage(QWidget):
 # ===========================================================================
 
 class DuplicatesPage(QWidget):
-    """Duplicate groups with wasted-space summary and expandable tree."""
-
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         root = QVBoxLayout(self)
@@ -652,14 +1073,14 @@ class DuplicatesPage(QWidget):
         panel.body.addWidget(self.summary)
 
         self.tree = QTreeWidget()
-        self.tree.setHeaderLabels(["File / Redundant Copy", "Location", "Size", "Modified"])
+        self.tree.setHeaderLabels(
+            ["File / Redundant Copy", "Location", "Size", "Modified"])
         self.tree.setAlternatingRowColors(True)
         self.tree.setWordWrap(False)
         self.tree.setRootIsDecorated(True)
         self.tree.setIndentation(20)
         self.tree.setUniformRowHeights(True)
         panel.body.addWidget(self.tree, 1)
-
         root.addWidget(panel, 1)
 
     def set_result(self, result: AnalysisResult) -> None:
@@ -680,8 +1101,7 @@ class DuplicatesPage(QWidget):
         for group in result.duplicate_groups:
             top = QTreeWidgetItem([
                 f"{group['count']} copies · {group['size_formatted']} each",
-                f"Wasted space: {group['wasted_formatted']}", "", "",
-            ])
+                f"Wasted space: {group['wasted_formatted']}", "", ""])
             top.setIcon(0, group_icon)
             top.setFirstColumnSpanned(True)
             self.tree.addTopLevelItem(top)
@@ -689,8 +1109,7 @@ class DuplicatesPage(QWidget):
                 file_icon = get_category_svg_icon(f.get("type", "Other"), size=16)
                 child = QTreeWidgetItem([
                     "  " + f["name"], f["parent"],
-                    f["size_formatted"], f["modified_formatted"],
-                ])
+                    f["size_formatted"], f["modified_formatted"]])
                 child.setIcon(0, file_icon)
                 top.addChild(child)
         self.tree.expandToDepth(0)
@@ -701,15 +1120,12 @@ class DuplicatesPage(QWidget):
 # ===========================================================================
 
 class InsightsPage(QWidget):
-    """Recommendations, key insights & hierarchy — with severity pills."""
-
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(14)
 
-        # Recommendations
         panel_rec = Panel("Actionable Optimization Recommendations", "sparkles",
                           "Ranked by impact on storage footprint")
         self.rec_container = QVBoxLayout()
@@ -717,7 +1133,6 @@ class InsightsPage(QWidget):
         panel_rec.body.addLayout(self.rec_container)
         root.addWidget(panel_rec, 3)
 
-        # Key insights
         panel_ins = Panel("Key Insights & Storage Telemetry", "insights",
                           "Automatic observations from the analysis")
         self.insights_container = QVBoxLayout()
@@ -725,7 +1140,6 @@ class InsightsPage(QWidget):
         panel_ins.body.addLayout(self.insights_container)
         root.addWidget(panel_ins, 3)
 
-        # Directory tree
         panel_tree = Panel("Directory Hierarchy", "folder",
                            "Top-level structure preview")
         self.tree_view = QLabel()
@@ -772,7 +1186,6 @@ class InsightsPage(QWidget):
         return card
 
     def set_result(self, result: AnalysisResult) -> None:
-        # Recommendations
         self._clear_layout(self.rec_container)
         if result.actionable_recommendations:
             for rec in result.actionable_recommendations:
@@ -790,7 +1203,6 @@ class InsightsPage(QWidget):
                     "success", "check-circle", "#22c55e",
                     "No storage warnings. Everything is in optimal condition."))
 
-        # Insights
         self._clear_layout(self.insights_container)
         for ins in result.key_insights:
             clean = ins.replace("**", "")
@@ -798,7 +1210,6 @@ class InsightsPage(QWidget):
                 self._make_insight_card(
                     "info", "check-circle", "#60a5fa", clean))
 
-        # Tree + warnings
         self.tree_view.setText(result.tree_text or "—")
         self.warnings.setText(
             "  ⚠  " + "  ·  ".join(result.warnings) if result.warnings else "")
@@ -809,8 +1220,6 @@ class InsightsPage(QWidget):
 # ===========================================================================
 
 class ExportPage(QWidget):
-    """Choose formats and export styled reports with per-format cards."""
-
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.result: AnalysisResult | None = None
@@ -819,7 +1228,6 @@ class ExportPage(QWidget):
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
         scroll.setStyleSheet("QScrollArea { background: transparent; }")
-
         inner = QWidget()
         scroll.setWidget(inner)
 
@@ -892,7 +1300,6 @@ class ExportPage(QWidget):
 
         panel.body.addLayout(formats_grid)
 
-        # Output directory row
         row = QHBoxLayout()
         row.setSpacing(10)
         self.dir_edit = QLineEdit()
@@ -916,15 +1323,12 @@ class ExportPage(QWidget):
 
         root.addWidget(panel)
 
-        # Status
         status_panel = Panel("Export Status", "check-circle",
                              "Output files and their sizes")
-        self.status = QLabel(
-            "Ready — run a scan and select formats to export.")
+        self.status = QLabel("Ready — run a scan and select formats to export.")
         self.status.setWordWrap(True)
         self.status.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        self.status.setStyleSheet(
-            "color: #cbd5e1; font-size: 12px; line-height: 1.5;")
+        self.status.setStyleSheet("color: #cbd5e1; font-size: 12px; line-height: 1.5;")
         status_panel.body.addWidget(self.status)
 
         btn_row = QHBoxLayout()
@@ -948,8 +1352,7 @@ class ExportPage(QWidget):
             self.status.setText(
                 f"Ready to export — {result.total_files:,} files indexed "
                 f"({result.total_storage_formatted}).")
-            self.export_badge.setText(
-                f"{result.total_files:,} files")
+            self.export_badge.setText(f"{result.total_files:,} files")
         else:
             self.status.setText("Run a scan first.")
             self.export_badge.setText("no data")
