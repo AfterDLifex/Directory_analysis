@@ -113,16 +113,22 @@ class FolderAnalyzer:
         self.result.recent_files = self._top_files(
             cfg.recent_n, sort_key=lambda f: f.modified, reverse=True)
 
-        # Extended analytics (new)
-        self.result.modified_timeline = self._modified_timeline()
-        self.result.day_of_week_distribution = self._day_of_week_distribution()
-        self.result.hour_of_day_distribution = self._hour_of_day_distribution()
-        self.result.filename_duplicates = self._filename_duplicates()
-        self.result.potential_junk = self._potential_junk()
+        # Extended analytics (new) - each gated by its config flag
+        if cfg.build_timeline:
+            self.result.modified_timeline = self._modified_timeline()
+            self.result.day_of_week_distribution = self._day_of_week_distribution()
+            self.result.hour_of_day_distribution = self._hour_of_day_distribution()
+        if cfg.detect_name_collisions:
+            self.result.filename_duplicates = self._filename_duplicates()
+        if cfg.detect_junk:
+            self.result.potential_junk = self._potential_junk()
         self.result.deep_files = self._deep_files(cfg.deep_depth_threshold)
         self.result.extensionless_files = self._extensionless_files()
-        self.result.long_path_files = self._long_path_files()
-        self.result.non_ascii_files = self._non_ascii_files()
+        if cfg.detect_long_paths:
+            self.result.long_path_files = self._long_path_files(
+                cfg.long_path_limit)
+        if cfg.detect_non_ascii:
+            self.result.non_ascii_files = self._non_ascii_files()
         self.result.mime_summary = self._mime_summary()
         self.result.directory_children = self._directory_children()
 
@@ -432,6 +438,7 @@ class FolderAnalyzer:
         return rows[:100]
 
     def _long_path_files(self, limit: int = 240) -> List[Dict]:
+        """Files whose absolute path is at least ``limit`` characters long."""
         rows = []
         for f in self.files:
             if len(f.path) >= limit:

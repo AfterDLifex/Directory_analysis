@@ -65,9 +65,34 @@ class AnalysisConfig:
     junk_min_age_days: int = 30
     generated_at: str = ""
 
+    # ---- optional analytics (all default-on, toggled from Settings) ----
+    detect_name_collisions: bool = True
+    detect_junk: bool = True
+    detect_long_paths: bool = True
+    detect_non_ascii: bool = True
+    build_timeline: bool = True
+
+    # long-path warning threshold in characters
+    long_path_limit: int = 240
+
     def __post_init__(self) -> None:
         if self.generated_at:
             self.generated_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    def describe(self) -> str:
+        """One-line human summary used by the status bar and reports."""
+        bits = []
+        if self.include_hidden:
+            bits.append("hidden included")
+        if self.follow_symlinks:
+            bits.append("symlinks followed")
+        bits.append("duplicates" if self.detect_duplicates else "no dup scan")
+        if self.detect_duplicates:
+            bits.append(f"hash {self.duplicate_hash_algorithm.upper()}")
+            bits.append(f"≤{self.max_duplicate_size_mb} MB")
+        if bits:
+            return " · ".join(bits)
+        return "defaults"
 
 
 @dataclass
