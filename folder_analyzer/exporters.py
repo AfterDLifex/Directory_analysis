@@ -2,7 +2,7 @@
 Export data formatting, templates, and export utilities.
 
 Generates sleek, modern reports with glassmorphism aesthetics, responsive styling,
-and vibrant SVG visualization charts.
+and vibrant animated SVG visualization charts.
 """
 
 from __future__ import annotations
@@ -137,419 +137,986 @@ def export_txt(result: AnalysisResult, output_path: str) -> str:
     return output_path
 
 
+# ---------------------------------------------------------------------------
+# Presentation helpers (animated SVG + tables + cards)
+# ---------------------------------------------------------------------------
+
 def _svg_donut(data: List[Dict[str, Any]], size: int = 260, label: str = "") -> str:
-    """Build a modern glassmorphic SVG donut chart with subtle glow."""
+    """Glassmorphic donut chart with draw-on-scroll animation."""
     if not data:
-        return f'<svg width="{size}" height="{size}"></svg>'
+        return (
+            f'<div class="empty-state" style="width:{size}px;height:{size}px">'
+            'No data to display</div>'
+        )
+
     total = sum(max(d.get("size", 0), d.get("count", 0)) for d in data) or 1
     cx, cy, r = size / 2, size / 2, size / 2 - 32
     inner = r * 0.48
-    strokes = []
-    badges = []
+
+    strokes, badges = [], []
     start_a = 0.0
-    for d in data:
+    for i, d in enumerate(data):
         val = max(d.get("size", 0), d.get("count", 0))
         pct = val / total
         end_a = start_a + pct * 360
-        large = 1 if pct > 0.5 else 0
-        sweep = 1 if (end_a - start_a) <= 180 else 0
-        x1 = cx + r * _cosd(start_a)
-        y1 = cy + r * _snd(start_a)
-        x2 = cx + r * _cosd(end_a)
-        y2 = cy + r * _snd(end_a)
+        large = 1 if (end_a - start_a) > 180 else 0
+
+        if pct > 0.0005:
+            x1 = cx + r * _cosd(start_a)
+            y1 = cy + r * _snd(start_a)
+            x2 = cx + r * _cosd(end_a)
+            y2 = cy + r * _snd(end_a)
+            color = d.get("color", "#4f8cff")
+            strokes.append(
+                f'<path class="donut-seg" style="--delay:{i * 0.10:.2f}s" '
+                f'd="M {x1:.2f} {y1:.2f} A {r:.2f} {r:.2f} 0 {large} 1 '
+                f'{x2:.2f} {y2:.2f}" '
+                f'fill="none" stroke="{color}" stroke-width="{inner:.1f}" '
+                f'opacity="0.92" stroke-linecap="butt" pathLength="1"/>'
+            )
+
+        lbl = (d.get("label") or d.get("category") or d.get("range")
+               or d.get("name", "?"))
         color = d.get("color", "#4f8cff")
-        strokes.append(
-            f'<path d="M {x1:.2f} {y1:.2f} A {r:.2f} {r:.2f} 0 {large} {sweep} {x2:.2f} {y2:.2f}" '
-            f'fill="none" stroke="{color}" stroke-width="{inner}" opacity="0.9" '
-            f'stroke-linecap="round"/>'
-        )
-        lbl = d.get("label") or d.get("category") or d.get("range") or d.get("name", "?")
         badges.append(
-            f'<span class="badge"><span class="badge-dot" style="background:{color}"></span>'
-            f'{_esc(lbl)} <b style="color:#ffffff;margin-left:4px">{pct*100:.1f}%</b></span>'
+            f'<span class="badge" style="--dot:{color}">'
+            f'<span class="badge-dot"></span>{_esc(lbl)} '
+            f'<b>{pct * 100:.1f}%</b></span>'
         )
         start_a = end_a
 
     svg = (
-        f'<svg width="{size}" height="{size}" viewBox="0 0 {size} {size}" '
-        f'xmlns="http://www.w3.org/2000/svg">'
-        f'<circle cx="{cx}" cy="{cy}" r="{r + 10}" fill="none" stroke="rgba(255,255,255,0.05)" stroke-width="1"/>'
-        f'<circle cx="{cx}" cy="{cy}" r="{r - inner/2}" fill="rgba(15,22,36,0.95)"/>'
+        f'<svg class="donut-svg" width="{size}" height="{size}" '
+        f'viewBox="0 0 {size} {size}" xmlns="http://www.w3.org/2000/svg">'
+        f'<circle cx="{cx}" cy="{cy}" r="{r + 10}" fill="none" '
+        f'stroke="rgba(255,255,255,0.05)" stroke-width="1"/>'
+        f'<circle cx="{cx}" cy="{cy}" r="{r - inner / 2:.1f}" '
+        f'fill="rgba(10,16,28,0.95)"/>'
         + "".join(strokes) +
         f'<text x="{cx}" y="{cy - 4}" text-anchor="middle" '
-        f'fill="#94a3b8" font-size="11" font-weight="600" text-transform="uppercase" letter-spacing="1">DISTRIBUTION</text>'
+        f'fill="#94a3b8" font-size="11" font-weight="600" '
+        f'letter-spacing="1">DISTRIBUTION</text>'
         f'<text x="{cx}" y="{cy + 16}" text-anchor="middle" '
-        f'fill="#ffffff" font-size="14" font-weight="bold">{_esc(label)}</text>'
+        f'fill="#ffffff" font-size="14" font-weight="700">{_esc(label)}</text>'
         f'</svg>'
     )
-    legend = '<div class="legend-wrap">' + "".join(badges) + "</div>"
-    return f'<div class="donut-container">{svg}{legend}</div>'
+    return ('<div class="donut-container">' + svg
+            + '<div class="legend-wrap">' + "".join(badges) + '</div></div>')
 
 
-def _svg_bar(data: List[Dict[str, Any]], width: int = 500, height: int = 280) -> str:
-    """Build a modern horizontal glassmorphic bar chart with glowing bars."""
+def _svg_bar(data: List[Dict[str, Any]], width: int = 500,
+             height: int = 280) -> str:
+    """Horizontal glass bar chart with staggered grow animation."""
     if not data:
-        return f'<svg width="{width}" height="{height}"></svg>'
+        return (f'<div class="empty-state" style="width:100%;height:{height}px">'
+                'No data to display</div>')
+
     max_val = max((d.get("size", 0) or d.get("count", 0)) for d in data) or 1
-    bar_h = 24
-    gap = 10
-    y = 36
+    bar_h, gap, y0 = 24, 10, 36
+    usable_w = width - 170
+
     parts = [
-        f'<svg width="{width}" height="{height}" viewBox="0 0 {width} {height}" xmlns="http://www.w3.org/2000/svg">',
-        f'<rect width="{width}" height="{height}" rx="12" fill="rgba(15,22,36,0.6)" stroke="rgba(255,255,255,0.05)" stroke-width="1"/>',
+        f'<svg class="chart-svg" width="{width}" height="{height}" '
+        f'viewBox="0 0 {width} {height}" xmlns="http://www.w3.org/2000/svg">',
+        f'<rect width="{width}" height="{height}" rx="12" '
+        f'fill="rgba(10,16,28,0.55)" stroke="rgba(255,255,255,0.05)"/>',
     ]
-    for d in data:
+
+    y = y0
+    for i, d in enumerate(data):
         val = d.get("size", 0) or d.get("count", 0)
-        usable_w = width - 170
         w = max(4.0, (val / max_val) * usable_w)
-        lbl = d.get("name") or d.get("label") or d.get("category") or d.get("range", "?")
+        lbl = (d.get("name") or d.get("label") or d.get("category")
+               or d.get("range", "?"))
         color = d.get("color", "#4f8cff")
-        
+        delay = i * 0.06
+
         # Track background
         parts.append(
-            f'<rect x="14" y="{y}" width="{usable_w}" height="{bar_h}" rx="6" fill="rgba(255,255,255,0.04)"/>'
+            f'<rect x="14" y="{y}" width="{usable_w}" height="{bar_h}" '
+            f'rx="6" fill="rgba(255,255,255,0.04)"/>'
         )
-        # Value fill bar
+        # Animated fill bar
         parts.append(
-            f'<rect x="14" y="{y}" width="{w:.1f}" height="{bar_h}" rx="6" fill="{color}" opacity="0.85"/>'
+            f'<rect class="bar-fill" style="--delay:{delay:.2f}s" '
+            f'x="14" y="{y}" width="{w:.1f}" height="{bar_h}" rx="6" '
+            f'fill="{color}" opacity="0.9"/>'
         )
         # Label on bar
         parts.append(
-            f'<text x="24" y="{y + bar_h/2 + 4}" font-size="11" font-weight="600" fill="#ffffff">{_esc(lbl)}</text>'
+            f'<text x="26" y="{y + bar_h / 2 + 4}" font-size="11" '
+            f'font-weight="600" fill="#ffffff" pointer-events="none">'
+            f'{_esc(lbl)}</text>'
         )
-        # Metric at right
+        # Value at right, fade-in
         val_str = format_size(val) if "size" in d else format_number(val)
         parts.append(
-            f'<text x="{width - 16}" y="{y + bar_h/2 + 4}" text-anchor="end" font-size="12" font-weight="700" fill="#93c5fd">{val_str}</text>'
+            f'<text class="bar-value" style="--delay:{delay + 0.35:.2f}s" '
+            f'x="{width - 16}" y="{y + bar_h / 2 + 4}" text-anchor="end" '
+            f'font-size="12" font-weight="700" fill="#93c5fd">'
+            f'{val_str}</text>'
         )
         y += bar_h + gap
+
     parts.append("</svg>")
     return "".join(parts)
 
 
-def _html_table(rows: List[Dict[str, Any]], cols: List[str], headers=None) -> str:
-    """Render a styled glassmorphic table."""
+def _html_table(rows: List[Dict[str, Any]], cols: List[str],
+                headers=None, searchable: bool = True) -> str:
+    """Render a styled glassmorphic table with optional search + sort."""
     head = headers or cols
     cells = "".join(f"<th>{_esc(h)}</th>" for h in head)
     body = []
     for row in rows:
         tds = "".join(f"<td>{_esc(row.get(c, ''))}</td>" for c in cols)
         body.append(f"<tr>{tds}</tr>")
+
+    toolbar = ""
+    if searchable:
+        toolbar = (
+            '<div class="table-toolbar">'
+            '<input class="table-search" type="search" '
+            'placeholder="Filter rows…" aria-label="Filter table rows">'
+            '<span class="table-hint">click a header to sort</span>'
+            '</div>'
+        )
     return (
-        '<div class="table-container"><table class="glass-table"><thead><tr>' + cells + "</tr></thead><tbody>"
-        + "".join(body) + "</tbody></table></div>"
+        toolbar
+        + '<div class="table-container"><table class="glass-table">'
+          '<thead><tr>' + cells + '</tr></thead><tbody>'
+        + "".join(body)
+        + '</tbody></table></div>'
     )
 
 
 def _summary_cards(r: AnalysisResult) -> str:
+    """Render the top-row KPI cards with animated counters."""
     cards_data = [
-        ("TOTAL FILES", format_number(r.total_files), f"{r.empty_files_count} empty files", "#3b82f6"),
-        ("FOLDERS", format_number(r.total_directories), "Hierarchies", "#8b5cf6"),
-        ("STORAGE", r.total_storage_formatted, "Total disk footprint", "#06b6d4"),
-        ("AVG FILE SIZE", r.avg_file_size_formatted, "Calculated mean", "#10b981"),
-        ("STORAGE HEALTH", f"{r.storage_efficiency_score}/100", r.storage_health_label, "#22c55e" if r.storage_efficiency_score >= 80 else "#eab308" if r.storage_efficiency_score >= 60 else "#ef4444"),
+        ("TOTAL FILES", format_number(r.total_files),
+         f"{r.empty_files_count} empty files", "#3b82f6"),
+        ("FOLDERS", format_number(r.total_directories),
+         "Hierarchies", "#8b5cf6"),
+        ("STORAGE", r.total_storage_formatted,
+         "Total disk footprint", "#06b6d4"),
+        ("AVG FILE SIZE", r.avg_file_size_formatted,
+         "Calculated mean", "#10b981"),
+        ("STORAGE HEALTH", f"{r.storage_efficiency_score}/100",
+         r.storage_health_label,
+         "#22c55e" if r.storage_efficiency_score >= 80
+         else "#eab308" if r.storage_efficiency_score >= 60
+         else "#ef4444"),
     ]
     if r.actionable_savings_bytes > 0:
-        cards_data.append(("POTENTIAL RECOVERY", r.actionable_savings_formatted, f"{len(r.duplicate_groups)} duplicate clusters", "#f97316"))
+        cards_data.append((
+            "POTENTIAL RECOVERY", r.actionable_savings_formatted,
+            f"{len(r.duplicate_groups)} duplicate clusters", "#f97316",
+        ))
     elif r.duplicate_groups:
-        cards_data.append(("DUPLICATE WASTE", r.duplicate_wasted_formatted, f"{len(r.duplicate_groups)} duplicate clusters", "#ef4444"))
-    
-    html = []
+        cards_data.append((
+            "DUPLICATE WASTE", r.duplicate_wasted_formatted,
+            f"{len(r.duplicate_groups)} duplicate clusters", "#ef4444",
+        ))
+
+    out = []
     for title, val, sub, color in cards_data:
-        html.append(f"""
-        <div class="stat-card" style="--accent: {color}">
-            <div class="stat-label">{title}</div>
-            <div class="stat-val">{val}</div>
-            <div class="stat-sub">{sub}</div>
-        </div>
-        """)
-    return "".join(html)
+        out.append(
+            f'<div class="stat-card" style="--accent:{color}">'
+            f'<div class="stat-label">{_esc(title)}</div>'
+            f'<div class="stat-val" data-display="{_esc(val)}">'
+            f'{_esc(val)}</div>'
+            f'<div class="stat-sub">{_esc(sub)}</div>'
+            f'</div>'
+        )
+    return "".join(out)
 
 
-def export_html(result: AnalysisResult, output_path: str, title: str = "Folder Analysis") -> str:
-    """Write an ultra-sleek, self-contained, offline HTML dashboard with glassmorphism."""
+# ---------------------------------------------------------------------------
+# HTML export — CSS and JS are kept as plain (non-f) strings so that literal
+# curly braces are preserved.
+# ---------------------------------------------------------------------------
+
+_CSS = r"""
+:root {
+  --bg-1:#090d16; --bg-2:#0d1424; --bg-3:#080d17;
+  --glass-bg:rgba(18,26,44,0.65);
+  --glass-strong:rgba(14,20,34,0.9);
+  --border:rgba(255,255,255,0.08);
+  --border-bright:rgba(110,168,254,0.35);
+  --text:#e2e8f0; --text-dim:#8da2c0; --text-muted:#64748b;
+  --accent:#3b82f6; --accent-2:#8b5cf6; --accent-3:#06b6d4;
+  --shadow:0 10px 30px rgba(0,0,0,0.35);
+  --radius:18px;
+  --ease:cubic-bezier(0.22,1,0.36,1);
+  color-scheme: dark;
+}
+html[data-theme="light"] {
+  --bg-1:#f4f7fc; --bg-2:#e9eff8; --bg-3:#f7f9fc;
+  --glass-bg:rgba(255,255,255,0.8);
+  --glass-strong:rgba(248,250,252,0.95);
+  --border:rgba(15,22,38,0.08);
+  --border-bright:rgba(59,130,246,0.35);
+  --text:#0f172a; --text-dim:#475569; --text-muted:#64748b;
+  --shadow:0 10px 30px rgba(15,22,38,0.08);
+  color-scheme: light;
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  margin:0; color:var(--text); min-height:100vh;
+  font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,
+    Helvetica,Arial,sans-serif;
+  background:linear-gradient(135deg,var(--bg-1) 0%,var(--bg-2) 50%,var(--bg-3) 100%);
+  background-attachment:fixed;
+  padding-bottom:80px;
+  overflow-x:hidden;
+}
+a { color:inherit; }
+
+/* Reading-progress bar */
+.progress-bar {
+  position:fixed; top:0; left:0; height:3px; width:0%;
+  background:linear-gradient(90deg,#3b82f6,#8b5cf6,#06b6d4);
+  z-index:100; transition:width .1s linear;
+  box-shadow:0 0 12px rgba(59,130,246,0.6);
+}
+
+/* Floating background orbs */
+.bg-orbs {
+  position:fixed; inset:0; z-index:-1; overflow:hidden; pointer-events:none;
+}
+.bg-orbs span {
+  position:absolute; border-radius:50%; filter:blur(90px);
+  opacity:.35; animation:float 26s ease-in-out infinite;
+}
+.bg-orbs span:nth-child(1){
+  width:520px;height:520px; top:-12%; left:-10%;
+  background:radial-gradient(circle,#3b82f6,transparent 70%);
+  animation-duration:28s;
+}
+.bg-orbs span:nth-child(2){
+  width:460px;height:460px; top:32%; right:-12%;
+  background:radial-gradient(circle,#8b5cf6,transparent 70%);
+  animation-duration:34s; animation-delay:-9s;
+}
+.bg-orbs span:nth-child(3){
+  width:400px;height:400px; bottom:-14%; left:28%;
+  background:radial-gradient(circle,#06b6d4,transparent 70%);
+  animation-duration:30s; animation-delay:-16s;
+}
+@keyframes float {
+  0%,100% { transform:translate(0,0) scale(1); }
+  33%     { transform:translate(60px,-50px) scale(1.12); }
+  66%     { transform:translate(-40px,55px) scale(.94); }
+}
+
+/* Sticky top nav */
+.topnav {
+  position:sticky; top:0; z-index:50;
+  backdrop-filter:blur(14px);
+  background:color-mix(in srgb, var(--bg-1) 72%, transparent);
+  border-bottom:1px solid var(--border);
+}
+.nav-inner {
+  max-width:1200px; margin:0 auto; padding:10px 24px;
+  display:flex; align-items:center; gap:20px;
+}
+.nav-brand {
+  font-weight:800; font-size:14px; letter-spacing:.02em;
+  background:linear-gradient(135deg,#93c5fd,#c4b5fd);
+  -webkit-background-clip:text; -webkit-text-fill-color:transparent;
+  white-space:nowrap;
+}
+.nav-links {
+  list-style:none; padding:0; margin:0; display:flex; gap:4px;
+  flex:1; overflow-x:auto; scrollbar-width:none;
+}
+.nav-links::-webkit-scrollbar { display:none; }
+.nav-links a {
+  display:inline-block; padding:8px 12px; border-radius:10px;
+  font-size:13px; font-weight:600; color:var(--text-dim);
+  text-decoration:none; transition:all .2s var(--ease);
+  white-space:nowrap;
+}
+.nav-links a:hover {
+  color:var(--text); background:rgba(255,255,255,0.06);
+}
+.nav-actions { display:flex; gap:6px; }
+.nav-actions button {
+  width:36px; height:36px; border-radius:10px; cursor:pointer;
+  background:rgba(255,255,255,0.05); color:var(--text);
+  border:1px solid var(--border); font-size:15px;
+  transition:all .2s var(--ease);
+}
+.nav-actions button:hover {
+  background:rgba(255,255,255,0.1); border-color:var(--border-bright);
+  transform:translateY(-1px);
+}
+
+/* Layout wrapper */
+.wrapper { max-width:1200px; margin:0 auto; padding:32px 24px; }
+
+/* Scroll reveal */
+.reveal {
+  opacity:0; transform:translateY(18px);
+  transition:opacity .7s var(--ease), transform .7s var(--ease);
+  will-change:opacity, transform;
+}
+.reveal.in-view { opacity:1; transform:none; }
+
+/* Header banner */
+.header {
+  background:var(--glass-bg);
+  border:1px solid var(--border);
+  border-radius:var(--radius);
+  padding:26px 32px;
+  margin-bottom:26px;
+  backdrop-filter:blur(14px);
+  box-shadow:var(--shadow);
+  display:flex; justify-content:space-between; align-items:center;
+  flex-wrap:wrap; gap:16px;
+  position:relative; overflow:hidden;
+}
+.header::after {
+  content:''; position:absolute; inset:0;
+  background:radial-gradient(600px circle at 0% 0%,
+    rgba(59,130,246,0.15), transparent 55%);
+  pointer-events:none;
+}
+.header h1 {
+  margin:0 0 8px; font-size:28px; font-weight:800;
+  background:linear-gradient(135deg,#ffffff 0%,#93c5fd 45%,#c4b5fd 100%);
+  background-size:220% 220%;
+  -webkit-background-clip:text; -webkit-text-fill-color:transparent;
+  animation:shimmer 8s ease-in-out infinite;
+}
+@keyframes shimmer {
+  0%,100% { background-position:0% 50%; }
+  50%     { background-position:100% 50%; }
+}
+.header-sub {
+  color:var(--text-dim); font-size:13px;
+  display:flex; align-items:center; gap:10px; flex-wrap:wrap;
+}
+.copy-path {
+  background:rgba(255,255,255,0.05);
+  border:1px solid var(--border);
+  padding:3px 10px; border-radius:6px;
+  cursor:pointer; transition:all .15s var(--ease);
+  color:var(--text-dim); font-size:12px; font-family:inherit;
+  display:inline-flex; align-items:center; gap:6px;
+  max-width:60ch; overflow:hidden; text-overflow:ellipsis;
+  white-space:nowrap;
+}
+.copy-path:hover { color:var(--text); border-color:var(--border-bright); }
+.copy-path.copied { color:#22c55e; border-color:#22c55e; }
+.badge-live {
+  background:linear-gradient(135deg,
+    rgba(59,130,246,0.22), rgba(139,92,246,0.22));
+  color:#93c5fd; border:1px solid rgba(96,165,250,0.4);
+  padding:6px 14px; border-radius:20px;
+  font-size:11px; font-weight:800; letter-spacing:.08em;
+  text-transform:uppercase;
+  box-shadow:0 0 22px rgba(59,130,246,0.25);
+}
+
+/* Stat cards */
+.cards-row {
+  display:grid;
+  grid-template-columns:repeat(auto-fit,minmax(220px,1fr));
+  gap:16px; margin-bottom:26px;
+}
+.stat-card {
+  background:var(--glass-bg);
+  border:1px solid var(--border);
+  border-radius:16px;
+  padding:20px 22px;
+  position:relative; overflow:hidden;
+  backdrop-filter:blur(10px);
+  transition:transform .25s var(--ease), border-color .25s var(--ease),
+             box-shadow .25s var(--ease);
+}
+.stat-card:hover {
+  transform:translateY(-3px);
+  border-color:var(--border-bright);
+  box-shadow:0 14px 40px rgba(0,0,0,0.35),
+             0 0 24px var(--accent-glow, rgba(59,130,246,0.2));
+}
+.stat-card::before {
+  content:''; position:absolute;
+  top:0; left:0; width:4px; height:100%;
+  background:var(--accent);
+  box-shadow:0 0 14px var(--accent);
+}
+.stat-label {
+  font-size:11px; font-weight:800; color:var(--text-dim);
+  letter-spacing:.1em; text-transform:uppercase;
+}
+.stat-val {
+  font-size:28px; font-weight:800; color:var(--text);
+  margin:8px 0 4px; letter-spacing:-.01em;
+  font-variant-numeric:tabular-nums;
+}
+.stat-sub { font-size:12px; color:var(--text-muted); }
+
+/* Panels */
+.grid2 {
+  display:grid;
+  grid-template-columns:repeat(auto-fit,minmax(460px,1fr));
+  gap:22px; margin-bottom:26px;
+}
+.glass-panel {
+  background:var(--glass-bg);
+  border:1px solid var(--border);
+  border-radius:var(--radius);
+  padding:24px;
+  backdrop-filter:blur(12px);
+  box-shadow:var(--shadow);
+  margin-bottom:22px;
+  transition:border-color .25s var(--ease),
+             box-shadow .25s var(--ease);
+}
+.glass-panel:hover { border-color:var(--border-bright); }
+.glass-panel h2 {
+  margin:0 0 18px; font-size:16px; font-weight:700; color:var(--text);
+  display:flex; align-items:center; gap:10px;
+  cursor:pointer; user-select:none;
+}
+.glass-panel h2::before {
+  content:''; width:8px; height:8px; border-radius:50%;
+  background:linear-gradient(135deg,#60a5fa,#a78bfa);
+  box-shadow:0 0 12px rgba(96,165,250,0.8);
+}
+.glass-panel h2::after {
+  content:'▾'; margin-left:auto; font-size:12px;
+  color:var(--text-muted);
+  transition:transform .25s var(--ease);
+}
+.glass-panel.collapsed h2::after { transform:rotate(-90deg); }
+.glass-panel.collapsed > *:not(h2) { display:none; }
+
+/* Donut */
+.donut-container {
+  display:flex; flex-direction:column; align-items:center; justify-content:center;
+}
+.donut-seg {
+  stroke-dasharray:1 1;
+  stroke-dashoffset:1;
+  animation:drawSeg 1.4s var(--ease) forwards;
+  animation-delay:var(--delay,0s);
+  filter:drop-shadow(0 0 6px currentColor);
+}
+@keyframes drawSeg { to { stroke-dashoffset:0; } }
+
+/* Bars */
+.bar-fill {
+  transform:scaleX(0);
+  transform-origin:left center;
+  transform-box:fill-box;
+  animation:growBar 1.1s var(--ease) forwards;
+  animation-delay:var(--delay,0s);
+}
+@keyframes growBar { to { transform:scaleX(1); } }
+.bar-value {
+  opacity:0;
+  animation:fadeVal .6s var(--ease) forwards;
+  animation-delay:var(--delay,0s);
+}
+@keyframes fadeVal { to { opacity:1; } }
+
+/* Legend */
+.legend-wrap {
+  display:flex; flex-wrap:wrap; gap:8px;
+  justify-content:center; margin-top:14px;
+}
+.badge {
+  background:rgba(255,255,255,0.05);
+  border:1px solid var(--border);
+  border-radius:8px; padding:5px 10px; font-size:11px;
+  display:inline-flex; align-items:center; gap:6px;
+  transition:all .2s var(--ease);
+}
+.badge:hover {
+  border-color:var(--border-bright); transform:translateY(-1px);
+}
+.badge b { color:var(--text); font-weight:700; }
+.badge-dot {
+  width:8px; height:8px; border-radius:50%;
+  background:var(--dot,#4f8cff);
+  box-shadow:0 0 8px var(--dot,#4f8cff);
+}
+
+/* Tables */
+.table-toolbar {
+  display:flex; align-items:center; gap:12px; margin-bottom:12px;
+}
+.table-search {
+  flex:1; max-width:280px;
+  background:rgba(255,255,255,0.05);
+  border:1px solid var(--border);
+  color:var(--text); border-radius:10px;
+  padding:9px 12px; font-size:13px;
+  outline:none; transition:all .2s var(--ease);
+  font-family:inherit;
+}
+.table-search:focus {
+  border-color:var(--border-bright);
+  box-shadow:0 0 0 3px rgba(59,130,246,0.15);
+}
+.table-hint { font-size:11px; color:var(--text-muted); }
+.table-container {
+  overflow-x:auto; border-radius:12px;
+  border:1px solid var(--border);
+}
+.glass-table {
+  width:100%; border-collapse:collapse; font-size:13px; text-align:left;
+}
+.glass-table th {
+  background:var(--glass-strong);
+  color:var(--text-dim); font-size:11px; font-weight:700;
+  text-transform:uppercase; letter-spacing:.06em;
+  padding:11px 14px; border-bottom:1px solid var(--border);
+  position:sticky; top:0; z-index:1;
+  white-space:nowrap;
+}
+.glass-table th.sortable { cursor:pointer; user-select:none; }
+.glass-table th.sortable:hover { color:var(--text); }
+.glass-table th[data-dir="asc"]::after  { content:' ▲'; color:#60a5fa; }
+.glass-table th[data-dir="desc"]::after { content:' ▼'; color:#60a5fa; }
+.glass-table td {
+  padding:10px 14px; border-bottom:1px solid var(--border);
+  color:var(--text); font-variant-numeric:tabular-nums;
+}
+.glass-table tbody tr { transition:background .15s var(--ease); }
+.glass-table tbody tr:hover td { background:rgba(255,255,255,0.04); }
+.glass-table tbody tr:last-child td { border-bottom:0; }
+
+/* Tree */
+.tree-box {
+  background:var(--glass-strong);
+  border:1px solid var(--border); border-radius:12px;
+  padding:16px;
+  font-family:'SFMono-Regular',Consolas,Monaco,monospace;
+  font-size:12px; color:#93c5fd;
+  white-space:pre-wrap; overflow-x:auto; line-height:1.55;
+  max-height:420px;
+}
+html[data-theme="light"] .tree-box { color:#1d4ed8; }
+
+/* Insights / recommendations */
+.insight-list { list-style:none; padding:0; margin:0; }
+.insight-item {
+  background:rgba(255,255,255,0.03);
+  border:1px solid var(--border);
+  border-radius:10px;
+  padding:12px 16px; margin-bottom:10px;
+  font-size:13px; line-height:1.55;
+  transition:all .2s var(--ease);
+}
+.insight-item:hover {
+  background:rgba(255,255,255,0.055);
+  border-color:var(--border-bright);
+  transform:translateX(3px);
+}
+.warn-badge { color:#f87171; font-weight:700; }
+
+/* Empty state */
+.empty-state {
+  display:flex; align-items:center; justify-content:center;
+  border-radius:12px; border:1px dashed var(--border);
+  color:var(--text-muted); font-size:13px; min-height:120px;
+}
+
+/* Back-to-top FAB */
+.back-to-top {
+  position:fixed; right:24px; bottom:24px;
+  width:46px; height:46px; border-radius:50%;
+  background:linear-gradient(135deg,#3b82f6,#8b5cf6);
+  color:#fff; border:0; cursor:pointer;
+  font-size:20px; font-weight:700;
+  box-shadow:0 12px 32px rgba(59,130,246,0.4);
+  opacity:0; transform:translateY(20px) scale(.9);
+  pointer-events:none;
+  transition:all .3s var(--ease);
+  z-index:60;
+}
+.back-to-top.visible {
+  opacity:1; transform:translateY(0) scale(1);
+  pointer-events:auto;
+}
+.back-to-top:hover { transform:translateY(-3px) scale(1.05); }
+
+/* Responsive */
+@media (max-width:720px) {
+  .wrapper { padding:20px 16px; }
+  .header { padding:20px; }
+  .header h1 { font-size:22px; }
+  .stat-val { font-size:22px; }
+  .grid2 { grid-template-columns:1fr; }
+  .nav-links { display:none; }
+}
+
+/* Reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration:.001ms !important;
+    animation-iteration-count:1 !important;
+    transition-duration:.001ms !important;
+    scroll-behavior:auto !important;
+  }
+  .donut-seg { stroke-dashoffset:0 !important; }
+  .bar-fill  { transform:scaleX(1) !important; }
+  .reveal    { opacity:1 !important; transform:none !important; }
+}
+
+/* Print */
+@media print {
+  .topnav, .back-to-top, .progress-bar, .bg-orbs,
+  .table-toolbar, .nav-actions { display:none !important; }
+  body { background:#fff !important; color:#0f172a !important; }
+  .glass-panel, .stat-card, .header {
+    background:#fff !important; border:1px solid #cbd5e1 !important;
+    box-shadow:none !important; break-inside:avoid;
+  }
+  .stat-val, .header h1 { -webkit-text-fill-color:#0f172a !important;
+    background:none !important; color:#0f172a !important; }
+  .tree-box { color:#1e293b !important; }
+}
+"""
+
+_JS = r"""
+(function(){
+  'use strict';
+
+  /* Progress bar */
+  var pb = document.getElementById('progressBar');
+  function updateProgress(){
+    var h = document.documentElement;
+    var pct = (h.scrollTop || document.body.scrollTop) /
+      Math.max(1, (h.scrollHeight - h.clientHeight)) * 100;
+    if (pb) pb.style.width = pct + '%';
+  }
+  window.addEventListener('scroll', updateProgress, {passive:true});
+  updateProgress();
+
+  /* Reveal on scroll */
+  var io = new IntersectionObserver(function(entries){
+    entries.forEach(function(e){
+      if (e.isIntersecting){
+        e.target.classList.add('in-view');
+        io.unobserve(e.target);
+      }
+    });
+  }, {threshold: 0.08, rootMargin: '0px 0px -40px 0px'});
+  document.querySelectorAll('.reveal').forEach(function(el){ io.observe(el); });
+
+  /* Counter animation */
+  var reduce = window.matchMedia &&
+    window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  function animateCounter(el){
+    var display = el.getAttribute('data-display') || el.textContent;
+    var m = display.match(/^([\d,]+(?:\.\d+)?)(.*)$/);
+    if (!m) return;
+    var target = parseFloat(m[1].replace(/,/g,''));
+    if (!isFinite(target) || target === 0){ el.textContent = display; return; }
+    var decimals = (m[1].split('.')[1] || '').length;
+    var suffix = m[2] || '';
+    if (reduce){ el.textContent = display; return; }
+
+    var start = performance.now();
+    var dur = 1400;
+    function tick(now){
+      var t = Math.min((now - start) / dur, 1);
+      var eased = 1 - Math.pow(1 - t, 3);
+      var v = target * eased;
+      el.textContent = v.toLocaleString(undefined, {
+        minimumFractionDigits: decimals,
+        maximumFractionDigits: decimals
+      }) + suffix;
+      if (t < 1) requestAnimationFrame(tick);
+      else el.textContent = display;
+    }
+    requestAnimationFrame(tick);
+  }
+
+  var cio = new IntersectionObserver(function(entries){
+    entries.forEach(function(e){
+      if (e.isIntersecting){
+        animateCounter(e.target);
+        cio.unobserve(e.target);
+      }
+    });
+  }, {threshold: 0.35});
+  document.querySelectorAll('.stat-val[data-display]')
+    .forEach(function(el){ cio.observe(el); });
+
+  /* Back to top */
+  var top = document.getElementById('backToTop');
+  if (top){
+    window.addEventListener('scroll', function(){
+      top.classList.toggle('visible', window.scrollY > 400);
+    }, {passive:true});
+    top.addEventListener('click', function(){
+      window.scrollTo({top:0, behavior:'smooth'});
+    });
+  }
+
+  /* Theme toggle */
+  var themeBtn = document.getElementById('themeToggle');
+  try {
+    var saved = localStorage.getItem('fa-theme');
+    if (saved) document.documentElement.setAttribute('data-theme', saved);
+  } catch(e){}
+  if (themeBtn){
+    themeBtn.addEventListener('click', function(){
+      var cur = document.documentElement.getAttribute('data-theme') || 'dark';
+      var next = cur === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      try { localStorage.setItem('fa-theme', next); } catch(e){}
+    });
+  }
+
+  /* Collapsible panels */
+  document.querySelectorAll('.glass-panel h2').forEach(function(h){
+    h.setAttribute('title', 'Click to collapse / expand');
+    h.addEventListener('click', function(){
+      h.parentElement.classList.toggle('collapsed');
+    });
+  });
+
+  /* Table search */
+  document.querySelectorAll('.table-search').forEach(function(input){
+    input.addEventListener('input', function(){
+      var q = input.value.toLowerCase();
+      var panel = input.closest('.glass-panel') || document;
+      panel.querySelectorAll('tbody tr').forEach(function(tr){
+        tr.style.display =
+          tr.textContent.toLowerCase().indexOf(q) >= 0 ? '' : 'none';
+      });
+    });
+  });
+
+  /* Table sort */
+  document.querySelectorAll('.glass-table').forEach(function(table){
+    var ths = table.querySelectorAll('thead th');
+    ths.forEach(function(th, idx){
+      th.classList.add('sortable');
+      th.addEventListener('click', function(){
+        var tbody = table.querySelector('tbody');
+        var rows = Array.prototype.slice.call(tbody.querySelectorAll('tr'));
+        var dir = th.getAttribute('data-dir') === 'asc' ? 'desc' : 'asc';
+        ths.forEach(function(o){ o.removeAttribute('data-dir'); });
+        th.setAttribute('data-dir', dir);
+
+        rows.sort(function(a, b){
+          var av = (a.children[idx] && a.children[idx].textContent || '').trim();
+          var bv = (b.children[idx] && b.children[idx].textContent || '').trim();
+          var an = parseFloat(av.replace(/[^\d.\-]/g, ''));
+          var bn = parseFloat(bv.replace(/[^\d.\-]/g, ''));
+          if (!isNaN(an) && !isNaN(bn)){
+            return dir === 'asc' ? an - bn : bn - an;
+          }
+          return dir === 'asc' ? av.localeCompare(bv) : bv.localeCompare(av);
+        });
+        rows.forEach(function(r){ tbody.appendChild(r); });
+      });
+    });
+  });
+
+  /* Copy-to-clipboard */
+  document.querySelectorAll('[data-copy]').forEach(function(el){
+    el.addEventListener('click', function(e){
+      e.stopPropagation();
+      var text = el.getAttribute('data-copy');
+      var prev = el.getAttribute('data-prev') || el.textContent;
+      var done = function(){
+        el.classList.add('copied');
+        el.setAttribute('data-prev', prev);
+        el.textContent = '✓ Copied';
+        setTimeout(function(){
+          el.classList.remove('copied');
+          el.textContent = prev;
+        }, 1200);
+      };
+      if (navigator.clipboard && navigator.clipboard.writeText){
+        navigator.clipboard.writeText(text).then(done).catch(done);
+      } else { done(); }
+    });
+  });
+})();
+"""
+
+
+def export_html(result: AnalysisResult, output_path: str,
+                title: str = "Folder Analysis") -> str:
+    """Write an ultra-sleek, self-contained, animated HTML dashboard."""
     r = result
-    css = """
-    :root {
-        --bg-grad: linear-gradient(135deg, #090d16 0%, #0d1424 50%, #080d17 100%);
-        --glass-bg: rgba(18, 26, 44, 0.65);
-        --glass-border: rgba(255, 255, 255, 0.08);
-        --glass-border-bright: rgba(110, 168, 254, 0.25);
-        --accent-glow: rgba(59, 130, 246, 0.25);
-    }
-    * { box-sizing: border-box; }
-    body {
-        margin: 0;
-        background: var(--bg-grad);
-        color: #e2e8f0;
-        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-        min-height: 100vh;
-        padding-bottom: 50px;
-    }
-    .wrapper {
-        max-width: 1200px;
-        margin: 0 auto;
-        padding: 32px 24px;
-    }
-    .header {
-        background: rgba(15, 22, 38, 0.75);
-        border: 1px solid var(--glass-border);
-        border-radius: 18px;
-        padding: 24px 30px;
-        margin-bottom: 26px;
-        backdrop-filter: blur(12px);
-        box-shadow: 0 10px 30px rgba(0,0,0,0.3);
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        flex-wrap: wrap;
-        gap: 16px;
-    }
-    .header h1 {
-        margin: 0 0 6px;
-        font-size: 26px;
-        font-weight: 800;
-        background: linear-gradient(135deg, #ffffff 0%, #93c5fd 100%);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-    }
-    .header-sub {
-        color: #7b8ba5;
-        font-size: 13px;
-    }
-    .badge-live {
-        background: rgba(59, 130, 246, 0.2);
-        color: #60a5fa;
-        border: 1px solid rgba(96, 165, 250, 0.4);
-        padding: 6px 14px;
-        border-radius: 20px;
-        font-size: 12px;
-        font-weight: 700;
-        text-transform: uppercase;
-        letter-spacing: 0.05em;
-    }
-    .cards-row {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-        gap: 16px;
-        margin-bottom: 26px;
-    }
-    .stat-card {
-        background: var(--glass-bg);
-        border: 1px solid var(--glass-border);
-        border-radius: 16px;
-        padding: 20px 22px;
-        position: relative;
-        overflow: hidden;
-        backdrop-filter: blur(8px);
-        transition: transform 0.2s ease, border-color 0.2s ease;
-    }
-    .stat-card:hover {
-        transform: translateY(-2px);
-        border-color: var(--glass-border-bright);
-    }
-    .stat-card::before {
-        content: '';
-        position: absolute;
-        top: 0; left: 0; width: 4px; height: 100%;
-        background: var(--accent);
-    }
-    .stat-label {
-        font-size: 11px;
-        font-weight: 700;
-        color: #8da2c0;
-        letter-spacing: 0.08em;
-    }
-    .stat-val {
-        font-size: 26px;
-        font-weight: 800;
-        color: #ffffff;
-        margin: 6px 0 2px;
-    }
-    .stat-sub {
-        font-size: 12px;
-        color: #64748b;
-    }
-    .grid2 {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(480px, 1fr));
-        gap: 22px;
-        margin-bottom: 26px;
-    }
-    .glass-panel {
-        background: var(--glass-bg);
-        border: 1px solid var(--glass-border);
-        border-radius: 18px;
-        padding: 24px;
-        backdrop-filter: blur(10px);
-        box-shadow: 0 8px 24px rgba(0,0,0,0.25);
-    }
-    .glass-panel h2 {
-        margin: 0 0 18px;
-        font-size: 16px;
-        font-weight: 700;
-        color: #ffffff;
-        display: flex;
-        align-items: center;
-        gap: 10px;
-        letter-spacing: 0.02em;
-    }
-    .donut-container {
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        justify-content: center;
-    }
-    .legend-wrap {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 8px;
-        justify-content: center;
-        margin-top: 14px;
-    }
-    .badge {
-        background: rgba(255,255,255,0.05);
-        border: 1px solid rgba(255,255,255,0.08);
-        border-radius: 8px;
-        padding: 4px 10px;
-        font-size: 11px;
-        display: inline-flex;
-        align-items: center;
-    }
-    .badge-dot {
-        width: 8px;
-        height: 8px;
-        border-radius: 50%;
-        display: inline-block;
-        margin-right: 6px;
-    }
-    .table-container {
-        overflow-x: auto;
-        border-radius: 12px;
-        border: 1px solid rgba(255,255,255,0.06);
-    }
-    .glass-table {
-        width: 100%;
-        border-collapse: collapse;
-        font-size: 13px;
-        text-align: left;
-    }
-    .glass-table th {
-        background: rgba(14, 20, 34, 0.95);
-        color: #8da2c0;
-        font-size: 11px;
-        font-weight: 700;
-        text-transform: uppercase;
-        letter-spacing: 0.06em;
-        padding: 10px 14px;
-        border-bottom: 1px solid var(--glass-border);
-    }
-    .glass-table td {
-        padding: 10px 14px;
-        border-bottom: 1px solid rgba(255,255,255,0.04);
-        color: #cbd5e1;
-    }
-    .glass-table tr:hover td {
-        background: rgba(255,255,255,0.03);
-        color: #ffffff;
-    }
-    .tree-box {
-        background: rgba(10, 15, 26, 0.9);
-        border: 1px solid var(--glass-border);
-        border-radius: 12px;
-        padding: 16px;
-        font-family: 'SFMono-Regular', Consolas, Monaco, monospace;
-        font-size: 12px;
-        color: #93c5fd;
-        white-space: pre-wrap;
-        overflow-x: auto;
-        line-height: 1.5;
-    }
-    .insight-list {
-        list-style: none;
-        padding: 0;
-        margin: 0;
-    }
-    .insight-item {
-        background: rgba(255, 255, 255, 0.03);
-        border: 1px solid rgba(255, 255, 255, 0.06);
-        border-radius: 10px;
-        padding: 12px 16px;
-        margin-bottom: 10px;
-        font-size: 13px;
-        line-height: 1.5;
-    }
-    .warn-badge {
-        color: #f87171;
-        font-weight: 600;
-    }
-    """
-    parts = [
-        "<!doctype html><html lang=en><head><meta charset=utf-8>",
-        "<meta name=viewport content='width=device-width,initial-scale=1'>",
-        f"<title>{_esc(title)} — Executive Report</title><style>{css}</style></head><body>",
-        "<div class=wrapper>",
-        "<div class=header>",
-        "<div>",
-        f"<h1>{_esc(title)}</h1>",
-        f"<div class=header-sub>{_esc(r.root_path)} · Scanned in {r.scan_duration_seconds}s · Generated {_esc(r.generated_at)}</div>",
-        "</div>",
-        "<div class=badge-live>Enterprise Report</div>",
-        "</div>",
-        f'<div class=cards-row>{_summary_cards(r)}</div>',
-        '<div class="grid2">',
-        f'<div class="glass-panel"><h2>Storage by File Type</h2>{_svg_donut(r.file_types[:8], label="file types")}</div>',
-        f'<div class="glass-panel"><h2>Storage by Category</h2>{_svg_donut(r.categories, label="categories")}</div>',
-        "</div>",
-        f'<div class="glass-panel" style="margin-bottom:26px"><h2>Top Directories (Largest Size)</h2>{_svg_bar(r.top_directories[:10], width=1100, height=320)}</div>',
-        '<div class="grid2">',
-        f'<div class="glass-panel"><h2>Age Distribution</h2>{_svg_bar(r.age_distribution, width=540, height=260)}</div>',
-        f'<div class="glass-panel"><h2>Size Distribution</h2>{_svg_bar(r.size_distribution, width=540, height=260)}</div>',
-        "</div>",
-        '<div class="glass-panel" style="margin-bottom:26px"><h2>Extension Breakdown</h2>' + _html_table(
-            r.file_types[:20], ["label", "category", "files", "size_formatted", "percentage"],
-            headers=["Extension", "Category", "Files", "Storage", "% Share"]) + "</div>",
-        '<div class="glass-panel" style="margin-bottom:26px"><h2>Largest Files Discovered</h2>' + _html_table(
-            r.largest_files[:15], ["name", "parent", "type", "size_formatted", "modified_formatted"],
-            headers=["File Name", "Location", "Type", "Size", "Modified"]) + "</div>",
-    ]
+
+    # --- Header ----------------------------------------------------------
+    header = (
+        '<div class="header reveal">'
+        '<div>'
+        f'<h1>{_esc(title)}</h1>'
+        '<div class="header-sub">'
+        f'<button class="copy-path" data-copy="{_esc(r.root_path)}" '
+        f'title="Copy path to clipboard">📁 {_esc(r.root_path)}</button>'
+        f'<span>· {r.scan_duration_seconds}s scan</span>'
+        f'<span>· {_esc(r.generated_at)}</span>'
+        '</div>'
+        '</div>'
+        '<div class="badge-live">Enterprise Report</div>'
+        '</div>'
+    )
+
+    # --- Charts ----------------------------------------------------------
+    chart_grid = (
+        '<div class="grid2 reveal">'
+        f'<div class="glass-panel"><h2>Storage by File Type</h2>'
+        f'{_svg_donut(r.file_types[:8], label="file types")}</div>'
+        f'<div class="glass-panel"><h2>Storage by Category</h2>'
+        f'{_svg_donut(r.categories, label="categories")}</div>'
+        '</div>'
+    )
+
+    top_dirs = (
+        '<div class="glass-panel reveal"><h2>Top Directories (Largest Size)</h2>'
+        f'{_svg_bar(r.top_directories[:10], width=1100, height=320)}</div>'
+    )
+
+    dists = (
+        '<div class="grid2 reveal">'
+        f'<div class="glass-panel"><h2>Age Distribution</h2>'
+        f'{_svg_bar(r.age_distribution, width=540, height=260)}</div>'
+        f'<div class="glass-panel"><h2>Size Distribution</h2>'
+        f'{_svg_bar(r.size_distribution, width=540, height=260)}</div>'
+        '</div>'
+    )
+
+    # --- Tables ----------------------------------------------------------
+    ext_table = (
+        '<div class="glass-panel reveal"><h2>Extension Breakdown</h2>'
+        + _html_table(
+            r.file_types[:20],
+            ["label", "category", "files", "size_formatted", "percentage"],
+            headers=["Extension", "Category", "Files", "Storage", "% Share"],
+        )
+        + '</div>'
+    )
+    files_table = (
+        '<div class="glass-panel reveal"><h2>Largest Files Discovered</h2>'
+        + _html_table(
+            r.largest_files[:15],
+            ["name", "parent", "type", "size_formatted", "modified_formatted"],
+            headers=["File Name", "Location", "Type", "Size", "Modified"],
+        )
+        + '</div>'
+    )
+
+    # --- Duplicates ------------------------------------------------------
+    dup_html = ""
     if r.duplicate_groups:
-        parts.append(f'<div class="glass-panel" style="margin-bottom:26px"><h2>Duplicate Storage Clusters (<span class=warn-badge>Wasted {_esc(r.duplicate_wasted_formatted)}</span>)</h2>')
+        rows = []
         for g in r.duplicate_groups[:12]:
             names = ", ".join(Path(f["path"]).name for f in g["files"])
-            parts.append(
+            rows.append(
                 f'<div class="insight-item">'
-                f'<b>{format_number(g["count"])} copies</b> · {_esc(g["size_formatted"])} each '
-                f'· <span class=warn-badge>Wasted: {_esc(g["wasted_formatted"])}</span><br>'
-                f'<span style="color:#8da2c0;font-size:12px;margin-top:4px;display:inline-block">{_esc(names)}</span>'
-                f'</div>'
+                f'<b>{format_number(g["count"])} copies</b> · '
+                f'{_esc(g["size_formatted"])} each · '
+                f'<span class="warn-badge">Wasted: '
+                f'{_esc(g["wasted_formatted"])}</span><br>'
+                f'<span style="color:var(--text-dim);font-size:12px;">'
+                f'{_esc(names)}</span></div>'
             )
-        parts.append("</div>")
+        dup_html = (
+            '<div class="glass-panel reveal"><h2>Duplicate Storage Clusters '
+            f'(<span class="warn-badge">Wasted '
+            f'{_esc(r.duplicate_wasted_formatted)}</span>)</h2>'
+            + "".join(rows) + '</div>'
+        )
 
+    # --- Recommendations -------------------------------------------------
+    rec_html = ""
     if r.actionable_recommendations:
-        parts.append('<div class="glass-panel" style="margin-bottom:26px"><h2>Actionable Optimization Recommendations</h2>')
+        items = []
         for rec in r.actionable_recommendations:
-            badge_color = "#ef4444" if rec["type"] == "Critical" else "#f59e0b" if rec["type"] == "Warning" else "#3b82f6"
-            parts.append(
-                f'<div class="insight-item" style="border-left: 4px solid {badge_color};">'
-                f'<div style="font-weight:700;color:#ffffff;margin-bottom:4px;">'
-                f'<span style="background:{badge_color};color:#ffffff;padding:2px 8px;border-radius:4px;font-size:11px;margin-right:8px;">{_esc(rec["type"])}</span>'
-                f'{_esc(rec["title"])}</div>'
-                f'<div style="color:#cbd5e1;font-size:12px;">{_esc(rec["action"])}</div>'
-                f'</div>'
+            color = ("#ef4444" if rec["type"] == "Critical"
+                     else "#f59e0b" if rec["type"] == "Warning"
+                     else "#3b82f6")
+            items.append(
+                f'<div class="insight-item" style="border-left:4px solid {color}">'
+                f'<div style="font-weight:700;color:var(--text);margin-bottom:4px">'
+                f'<span style="background:{color};color:#fff;padding:2px 8px;'
+                f'border-radius:4px;font-size:11px;margin-right:8px">'
+                f'{_esc(rec["type"])}</span>{_esc(rec["title"])}</div>'
+                f'<div style="color:var(--text-dim);font-size:12px">'
+                f'{_esc(rec["action"])}</div></div>'
             )
-        parts.append('</div>')
+        rec_html = (
+            '<div class="glass-panel reveal"><h2>Actionable Optimization '
+            'Recommendations</h2>' + "".join(items) + '</div>'
+        )
 
-    parts.append('<div class="grid2">')
-    parts.append('<div class="glass-panel"><h2>Key Insights</h2><ul class=insight-list>'
-                 + "".join(f'<li class="insight-item">✓ {i}</li>' for i in r.key_insights) + "</ul></div>")
-    parts.append('<div class="glass-panel"><h2>Directory Structure (Top Level)</h2><pre class=tree-box>'
-                 + _esc(r.tree_text or "No hierarchy text available") + "</pre></div>")
-    parts.append('</div>')
+    # --- Insights + tree -------------------------------------------------
+    insights = (
+        '<div class="grid2 reveal">'
+        '<div class="glass-panel"><h2>Key Insights</h2>'
+        '<ul class="insight-list">'
+        + "".join(f'<li class="insight-item">✓ {i}</li>' for i in r.key_insights)
+        + '</ul></div>'
+        '<div class="glass-panel"><h2>Directory Structure (Top Level)</h2>'
+        '<pre class="tree-box">'
+        + _esc(r.tree_text or "No hierarchy text available")
+        + '</pre></div>'
+        '</div>'
+    )
 
-    parts.append("</div></body></html>")
+    # --- Navigation ------------------------------------------------------
+    nav = (
+        '<nav class="topnav"><div class="nav-inner">'
+        '<div class="nav-brand">📊 Folder Analysis</div>'
+        '<ul class="nav-links">'
+        '<li><a href="#overview">Overview</a></li>'
+        '<li><a href="#charts">Charts</a></li>'
+        '<li><a href="#breakdown">Breakdown</a></li>'
+        '<li><a href="#duplicates">Duplicates</a></li>'
+        '<li><a href="#recommendations">Actions</a></li>'
+        '<li><a href="#insights">Insights</a></li>'
+        '</ul>'
+        '<div class="nav-actions">'
+        '<button id="themeToggle" title="Toggle light / dark theme">🌓</button>'
+        '<button onclick="window.print()" title="Print report">🖨</button>'
+        '</div></div></nav>'
+    )
+
+    html_doc = (
+        '<!doctype html><html lang="en" data-theme="dark"><head>'
+        '<meta charset="utf-8">'
+        '<meta name="viewport" content="width=device-width,initial-scale=1">'
+        f'<title>{_esc(title)} — Executive Report</title>'
+        f'<style>{_CSS}</style></head><body>'
+        '<div class="progress-bar" id="progressBar"></div>'
+        '<div class="bg-orbs" aria-hidden="true"><span></span><span></span>'
+        '<span></span></div>'
+        + nav
+        + '<div class="wrapper">'
+        + header
+        + f'<section id="overview" class="cards-row reveal">'
+          f'{_summary_cards(r)}</section>'
+        + f'<section id="charts">{chart_grid}{top_dirs}{dists}</section>'
+        + f'<section id="breakdown">{ext_table}{files_table}</section>'
+        + f'<section id="duplicates">{dup_html}</section>'
+        + f'<section id="recommendations">{rec_html}</section>'
+        + f'<section id="insights">{insights}</section>'
+        + '</div>'
+        '<button id="backToTop" class="back-to-top" title="Back to top" '
+        'aria-label="Back to top">↑</button>'
+        f'<script>{_JS}</script>'
+        '</body></html>'
+    )
+
     with open(output_path, "w", encoding="utf-8") as fh:
-        fh.write("\n".join(parts))
+        fh.write(html_doc)
     return output_path
 
 
