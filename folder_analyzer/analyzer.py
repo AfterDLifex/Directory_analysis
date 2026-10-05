@@ -90,8 +90,12 @@ class FolderAnalyzer:
         self.result.duplicate_wasted_formatted = format_size(
             self.result.duplicate_wasted_bytes)
 
+        self.result.empty_files_list = self._find_empty_files()
+        self.result.empty_files_count = len(self.result.empty_files_list)
+
         self.result.tree_text = self._build_tree()
         self.result.key_insights = self._build_insights()
+        self._compute_health_and_recommendations()
         self._finalize(start)
         return self.result
 
@@ -299,6 +303,103 @@ class FolderAnalyzer:
                 f"due to permission errors."
             )
         return insights
+
+    def _find_empty_files(self) -> List[Dict]:
+        empty = [self._to_record(f) for f in self.files if f.size == 0]
+        return empty[:100]
+
+    def _compute_health_and_recommendations(self) -> None:
+        r = self.result
+        score = 100
+        recs = []
+
+        # Duplicate penalty
+        dup_waste = r.duplicate_wasted_bytes
+        total_bytes = r.total_storage or 1
+        dup_pct = (dup_waste / total_bytes) * 100
+
+        if dup_pct > 25:
+            score -= 30
+            recs.append({
+                "type": "Critical",
+                "title": f"Deduplicate Clustered Files ({r.duplicate_wasted_formatted} recoverable)",
+                "action": f"Remove {len(r.duplicate_groups)} duplicate clusters to reclaim {r.duplicate_wasted_formatted} of wasted storage."
+            })
+        elif dup_pct > 10:
+            score -= 15
+            recs.append({
+                "type": "Warning",
+                "title": f"Review Redundant Files ({r.duplicate_wasted_formatted} waste)",
+                "action": f"{len(r.duplicate_groups)} duplicate file groups detected. Reclaim up to {r.duplicate_wasted_formatted}."
+            })
+        elif dup_waste > 0:
+            score -= 5
+            recs.append({
+                "type": "Notice",
+                "title": f"Minor Duplication Detected",
+                "action": f"{r.duplicate_wasted_formatted} can be recovered by pruning {len(r.duplicate_groups)} duplicated item(s)."
+            })
+
+        # Empty files penalty
+        empty_count = r.empty_files_count
+        if empty_count > 50:
+            score -= 15
+            recs.append({
+                "type": "Notice",
+                "title": f"Clean Up {empty_count:,} Zero-Byte Files",
+                "action": "Numerous 0-byte orphan files detected. Cleaning them up simplifies directory indexes."
+            })
+        elif empty_count > 10:
+            score -= 5
+            recs.append({
+                "type": "Notice",
+                "title": f"Orphan 0-Byte Files Found ({empty_count})",
+                "action": "Consider removing zero-byte placeholder files to maintain a tidy filesystem."
+            })
+
+        # Stale/archival files (>2 years old)
+        old_bucket = next((b for b in r.age_distribution if "Older than" in b["category"]), None)
+        if old_bucket and old_bucket["percentage"] > 35:
+            score -= 10
+            recs.append({
+                "type": "Archive",
+                "title": f"Archive Stale Data ({old_bucket['size_formatted']} > 2 yrs old)",
+                "action": f"{old_bucket['percentage']}% of files haven't been modified in over 2 years. Compressing or offloading them to cold storage can save significant primary disk space."
+            })
+
+        # Top heavy directory
+        if r.top_directories and r.top_directories[0]["percentage"] > 60:
+            top_dir = r.top_directories[0]
+            recs.append({
+                "type": "Notice",
+                "title": f"Storage Imbalance in '{top_dir['name']}'",
+                "action": f"Single directory holds {top_dir['percentage']}% of total storage ({top_dir['size_formatted']}). Consider partitioning or organizing subfolders."
+            })
+
+        # Largest single files concentration
+        if r.largest_files and len(r.largest_files) >= 5:
+            top5_sum = sum(f["size"] for f in r.largest_files[:5])
+            if (top5_sum / total_bytes) > 0.40 and total_bytes > 50 * 1024 * 1024:
+                recs.append({
+                    "type": "Notice",
+                    "title": "Top 5 Large Files Hold Major Footprint",
+                    "action": f"The 5 largest files account for {format_percentage(top5_sum, total_bytes)}% of total storage. Review them in the File Explorer tab."
+                })
+
+        score = max(10, min(100, score))
+        r.storage_efficiency_score = score
+        if score >= 90:
+            r.storage_health_label = "Optimal"
+        elif score >= 75:
+            r.storage_health_label = "Good"
+        elif score >= 50:
+            r.storage_health_label = "Needs Optimization"
+        else:
+            r.storage_health_label = "High Waste Detected"
+
+        r.actionable_savings_bytes = dup_waste
+        r.actionable_savings_formatted = r.duplicate_wasted_formatted
+        r.actionable_recommendations = recs
 
     def _finalize(self, start: float) -> None:
         self.result.scan_duration_seconds = round(time.perf_counter() - start, 2)

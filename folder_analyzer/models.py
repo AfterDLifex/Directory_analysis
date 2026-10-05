@@ -92,6 +92,14 @@ class AnalysisResult:
     avg_file_size: int = 0
     avg_file_size_formatted: str = "0 B"
 
+    # storage health & actionable efficiency analysis
+    storage_efficiency_score: int = 100  # 0-100 score
+    storage_health_label: str = "Optimal"  # Optimal, Good, Needs Attention, Critical
+    actionable_savings_bytes: int = 0
+    actionable_savings_formatted: str = "0 B"
+    empty_files_count: int = 0
+    empty_files_list: List[Dict[str, Any]] = field(default_factory=list)
+
     # breakdown lists (each entry is a dict for easy templating / charting)
     file_types: List[Dict[str, Any]] = field(default_factory=list)
     top_directories: List[Dict[str, Any]] = field(default_factory=list)
@@ -109,9 +117,10 @@ class AnalysisResult:
     duplicate_wasted_bytes: int = 0
     duplicate_wasted_formatted: str = "0 B"
 
-    # textual artefacts
+    # textual artefacts & recommendations
     tree_text: str = ""
     key_insights: List[str] = field(default_factory=list)
+    actionable_recommendations: List[Dict[str, str]] = field(default_factory=list)
     warnings: List[str] = field(default_factory=list)
     scan_duration_seconds: float = 0.0
 
