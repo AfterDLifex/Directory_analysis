@@ -52,40 +52,41 @@ QToolTip {{
 /* ==================== TOP GLASS HEADER ==================== */
 #TopBar {{
     background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-        stop:0 rgba(16, 22, 36, 0.85),
-        stop:0.5 rgba(22, 30, 48, 0.85),
-        stop:1 rgba(16, 22, 36, 0.85));
+        stop:0 rgba(14, 20, 34, 0.95),
+        stop:0.5 rgba(20, 28, 46, 0.92),
+        stop:1 rgba(14, 20, 34, 0.95));
     border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-    padding: 12px 20px;
+    padding: 12px 22px;
 }}
 
 #AppLogoBadge {{
     background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #3b82f6, stop:1 #8b5cf6);
     color: #ffffff;
     font-weight: 800;
-    font-size: 14px;
-    padding: 6px 10px;
-    border-radius: 8px;
-    border: 1px solid rgba(255, 255, 255, 0.25);
+    font-size: 13px;
+    padding: 6px 12px;
+    border-radius: 9px;
+    border: 1px solid rgba(255, 255, 255, 0.3);
+    letter-spacing: 0.08em;
 }}
 
 #TopBarTitle {{
     color: #ffffff;
     font-size: 16px;
     font-weight: 700;
-    letter-spacing: 0.3px;
+    letter-spacing: 0.2px;
 }}
 
 #TopBarSubtitle {{
-    color: #7b8ba5;
+    color: #8da2c0;
     font-size: 11px;
     font-weight: 500;
 }}
 
 /* ==================== SIDEBAR NAVIGATION ==================== */
 #NavContainer {{
-    background: rgba(13, 18, 29, 0.75);
-    border-right: 1px solid rgba(255, 255, 255, 0.06);
+    background: rgba(11, 16, 28, 0.85);
+    border-right: 1px solid rgba(255, 255, 255, 0.07);
 }}
 
 #NavList {{
@@ -94,13 +95,13 @@ QToolTip {{
     outline: none;
     font-weight: 600;
     font-size: 13px;
-    padding: 8px 6px;
+    padding: 10px 8px;
 }}
 
 #NavList::item {{
-    height: 42px;
+    height: 44px;
     margin: 4px 6px;
-    padding: 0 16px;
+    padding: 0 14px;
     border-radius: 10px;
     color: #94a3b8;
     background: transparent;
@@ -108,23 +109,23 @@ QToolTip {{
 }}
 
 #NavList::item:hover {{
-    background: rgba(255, 255, 255, 0.05);
-    color: #f1f5f9;
-    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: rgba(255, 255, 255, 0.06);
+    color: #ffffff;
+    border: 1px solid rgba(255, 255, 255, 0.1);
 }}
 
 #NavList::item:selected, #NavList::item:selected:focus {{
     background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-        stop:0 rgba(59, 130, 246, 0.32),
-        stop:1 rgba(139, 92, 246, 0.20));
+        stop:0 rgba(59, 130, 246, 0.35),
+        stop:1 rgba(139, 92, 246, 0.22));
     color: #ffffff;
-    border: 1px solid rgba(96, 165, 250, 0.45);
+    border: 1px solid rgba(96, 165, 250, 0.55);
     font-weight: 700;
 }}
 
 /* ==================== GLASS CARDS & PANELS ==================== */
-QGroupBox, .GlassCard, #StatCard {{
-    background: rgba(19, 26, 42, 0.65);
+QGroupBox, .GlassCard {{
+    background: rgba(18, 25, 42, 0.7);
     border: 1px solid rgba(255, 255, 255, 0.08);
     border-radius: 14px;
     margin: 8px 0;
@@ -133,9 +134,9 @@ QGroupBox, .GlassCard, #StatCard {{
     color: #e2e8f0;
 }}
 
-QGroupBox:hover, .GlassCard:hover, #StatCard:hover {{
-    border-color: rgba(96, 165, 250, 0.3);
-    background: rgba(24, 33, 52, 0.72);
+QGroupBox:hover, .GlassCard:hover {{
+    border-color: rgba(96, 165, 250, 0.35);
+    background: rgba(22, 32, 54, 0.75);
 }}
 
 QGroupBox::title {{
@@ -157,6 +158,13 @@ QGroupBox::title {{
     border: 1px solid rgba(255, 255, 255, 0.09);
     border-radius: 14px;
     min-height: 80px;
+}}
+
+#StatCard:hover {{
+    border-color: rgba(96, 165, 250, 0.35);
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop:0 rgba(34, 46, 74, 0.75),
+        stop:1 rgba(20, 28, 46, 0.65));
 }}
 
 #StatCardTitle {{

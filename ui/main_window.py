@@ -10,55 +10,71 @@ from __future__ import annotations
 import os
 
 from PySide6.QtCore import (
-    QEasingCurve, QParallelAnimationGroup, QPropertyAnimation, QThread, Qt,
+    QEasingCurve, QPropertyAnimation, QSize, QThread, Qt,
 )
 from PySide6.QtWidgets import (
     QFileDialog, QGraphicsOpacityEffect, QHBoxLayout, QLabel, QLineEdit,
-    QListWidget, QPushButton, QProgressBar, QStackedWidget, QVBoxLayout,
-    QWidget,
+    QListWidget, QListWidgetItem, QPushButton, QProgressBar, QStackedWidget,
+    QVBoxLayout, QWidget,
 )
 
 from folder_analyzer import __version__
 from folder_analyzer.models import AnalysisConfig
 
+from .icons import get_svg_icon, get_svg_pixmap
 from .pages import (
     ChartsPage, DuplicatesPage, ExportPage, FilesPage, InsightsPage,
     OverviewPage,
 )
 from .scan_worker import ScanWorker
 
-PAGES = [
-    ("📊 Overview", OverviewPage),
-    ("📈 Visual Charts", ChartsPage),
-    ("📁 File Explorer", FilesPage),
-    ("⚠️ Duplicates", DuplicatesPage),
-    ("💡 Deep Insights", InsightsPage),
-    ("🚀 Export Data", ExportPage),
+PAGE_DEFS = [
+    ("Overview", "overview", OverviewPage),
+    ("Visual Charts", "charts", ChartsPage),
+    ("File Explorer", "files", FilesPage),
+    ("Duplicates", "duplicates", DuplicatesPage),
+    ("Deep Insights", "insights", InsightsPage),
+    ("Export Data", "export", ExportPage),
 ]
 
 
 class AnimatedStackedWidget(QStackedWidget):
-    """QStackedWidget that transitions between pages with a smooth fade animation."""
+    """QStackedWidget that transitions between pages with a clean fade-in animation and no overlapping."""
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self._fade_anim = None
+        self._fade_anim: QPropertyAnimation | None = None
 
     def setCurrentIndex(self, index: int) -> None:
-        widget = self.widget(index)
-        if not widget:
-            super().setCurrentIndex(index)
-            return
+        # Stop any in-flight animation before switching
+        if self._fade_anim is not None:
+            self._fade_anim.stop()
+            self._fade_anim = None
+
+        # Clean graphics effect from the current widget so it doesn't linger
+        curr = self.currentWidget()
+        if curr is not None:
+            curr.setGraphicsEffect(None)
 
         super().setCurrentIndex(index)
-        effect = QGraphicsOpacityEffect(widget)
-        widget.setGraphicsEffect(effect)
+        target = self.widget(index)
+        if not target:
+            return
+
+        effect = QGraphicsOpacityEffect(target)
+        target.setGraphicsEffect(effect)
 
         anim = QPropertyAnimation(effect, b"opacity", self)
-        anim.setDuration(240)
-        anim.setStartValue(0.2)
+        anim.setDuration(200)
+        anim.setStartValue(0.15)
         anim.setEndValue(1.0)
         anim.setEasingCurve(QEasingCurve.OutCubic)
+
+        def _cleanup():
+            target.setGraphicsEffect(None)
+            self._fade_anim = None
+
+        anim.finished.connect(_cleanup)
         self._fade_anim = anim
         anim.start()
 
@@ -70,8 +86,8 @@ class MainWindow(QWidget):
         super().__init__()
         self.setWindowTitle(f"Folder Analysis Pro v{__version__}")
         self.setObjectName("RootContainer")
-        self.resize(1200, 780)
-        self.setMinimumSize(980, 660)
+        self.resize(1220, 800)
+        self.setMinimumSize(1000, 680)
         self._thread: QThread | None = None
         self._worker: ScanWorker | None = None
         self._result = None
@@ -117,10 +133,10 @@ class MainWindow(QWidget):
         layout.addWidget(badge)
 
         title_box = QVBoxLayout()
-        title_box.setSpacing(1)
+        title_box.setSpacing(2)
         title = QLabel("Folder Storage Analytics")
         title.setObjectName("TopBarTitle")
-        sub = QLabel("Glassmorphic Deep Engine")
+        sub = QLabel("Glassmorphic Deep Engine & Storage Optimizer")
         sub.setObjectName("TopBarSubtitle")
         title_box.addWidget(title)
         title_box.addWidget(sub)
@@ -136,16 +152,19 @@ class MainWindow(QWidget):
 
         browse = QPushButton("Browse…")
         browse.setObjectName("BrowseButton")
+        browse.setIcon(get_svg_icon("folder", color="#cbd5e1", size=16))
         browse.clicked.connect(self._browse)
         layout.addWidget(browse)
 
-        self.analyze_btn = QPushButton("⚡ Analyze")
+        self.analyze_btn = QPushButton(" Analyze")
         self.analyze_btn.setObjectName("RunButton")
+        self.analyze_btn.setIcon(get_svg_icon("zap", color="#ffffff", size=16))
         self.analyze_btn.clicked.connect(self.start_scan)
         layout.addWidget(self.analyze_btn)
 
         self.cancel_btn = QPushButton("Cancel")
         self.cancel_btn.setObjectName("CancelButton")
+        self.cancel_btn.setIcon(get_svg_icon("cancel", color="#ffffff", size=16))
         self.cancel_btn.setEnabled(False)
         self.cancel_btn.clicked.connect(self.cancel_scan)
         layout.addWidget(self.cancel_btn)
@@ -154,22 +173,25 @@ class MainWindow(QWidget):
     def _build_nav(self) -> QWidget:
         container = QWidget()
         container.setObjectName("NavContainer")
-        container.setFixedWidth(210)
+        container.setFixedWidth(220)
         lay = QVBoxLayout(container)
-        lay.setContentsMargins(6, 12, 6, 12)
-        lay.setSpacing(4)
+        lay.setContentsMargins(8, 14, 8, 14)
+        lay.setSpacing(6)
 
         self.nav = QListWidget()
         self.nav.setObjectName("NavList")
-        for name, _cls in PAGES:
-            self.nav.addItem(name)
+        self.nav.setIconSize(QSize(20, 20))
+        for title, icon_name, _cls in PAGE_DEFS:
+            item = QListWidgetItem("  " + title)
+            item.setIcon(get_svg_icon(icon_name, color="#94a3b8", active_color="#ffffff", size=20))
+            self.nav.addItem(item)
         lay.addWidget(self.nav)
         return container
 
     def _build_pages(self) -> QStackedWidget:
         self.stack = AnimatedStackedWidget()
         self.pages = []
-        for _name, cls in PAGES:
+        for _title, _icon, cls in PAGE_DEFS:
             page = cls()
             self.pages.append(page)
             self.stack.addWidget(page)
@@ -182,7 +204,11 @@ class MainWindow(QWidget):
         layout.setContentsMargins(20, 8, 20, 8)
         layout.setSpacing(14)
 
-        self.status_label = QLabel("✨ Ready — choose a folder and press Analyze.")
+        self.status_icon = QLabel()
+        self.status_icon.setPixmap(get_svg_pixmap("sparkles", size=16, color="#60a5fa"))
+        layout.addWidget(self.status_icon)
+
+        self.status_label = QLabel("Ready — choose a folder and press Analyze.")
         self.progress = QProgressBar()
         self.progress.setTextVisible(False)
         self.progress.setFixedHeight(6)
@@ -194,7 +220,8 @@ class MainWindow(QWidget):
         return bar
 
     def _on_nav_changed(self, index: int) -> None:
-        self.stack.setCurrentIndex(index)
+        if 0 <= index < self.stack.count():
+            self.stack.setCurrentIndex(index)
 
     # -- actions -------------------------------------------------------------
 
@@ -211,7 +238,8 @@ class MainWindow(QWidget):
         text = self.path_edit.text().strip()
         path = os.path.abspath(os.path.expanduser(text)) if text else ""
         if not path or not os.path.isdir(path):
-            self.status_label.setText("⚠️ Please select a valid directory first.")
+            self.status_icon.setPixmap(get_svg_pixmap("warning", size=16, color="#f87171"))
+            self.status_label.setText("Please select a valid directory first.")
             return
         cfg = AnalysisConfig(
             folder_path=path,
@@ -222,7 +250,8 @@ class MainWindow(QWidget):
             largest_n=50,
             oldest_n=50,
         )
-        self._set_busy(True, f"🔍 Indexing and analyzing {path} …")
+        self._set_busy(True, f"Indexing and analyzing {path} …")
+        self.status_icon.setPixmap(get_svg_pixmap("search", size=16, color="#38bdf8"))
         self.progress.setRange(0, 0)  # indeterminate animated pulse
 
         self._thread = QThread(self)
@@ -250,22 +279,26 @@ class MainWindow(QWidget):
         for page in self.pages:
             page.set_result(result)
         summary = (
-            f"✨ {result.root_name}: {result.total_files:,} files · "
+            f"{result.root_name}: {result.total_files:,} files · "
             f"{result.total_storage_formatted} · "
-            f"{result.scan_duration_seconds}s scan"
+            f"Health: {result.storage_efficiency_score}/100 ({result.storage_health_label}) · "
+            f"{result.scan_duration_seconds}s"
         )
         if result.duplicate_groups:
-            summary += f" · ⚠️ {result.duplicate_wasted_formatted} duplicate waste"
+            summary += f" · Wasted: {result.duplicate_wasted_formatted}"
+        self.status_icon.setPixmap(get_svg_pixmap("check", size=16, color="#22c55e"))
         self.status_label.setText(summary)
         self._teardown_worker()
         self._set_busy(False)
 
     def _on_failed(self, message: str) -> None:
-        self.status_label.setText(f"❌ Scan failed: {message}")
+        self.status_icon.setPixmap(get_svg_pixmap("cancel", size=16, color="#ef4444"))
+        self.status_label.setText(f"Scan failed: {message}")
         self._teardown_worker()
         self._set_busy(False)
 
     def _on_cancelled(self) -> None:
+        self.status_icon.setPixmap(get_svg_pixmap("warning", size=16, color="#f59e0b"))
         self.status_label.setText("Scan cancelled by user.")
         self._teardown_worker()
         self._set_busy(False)

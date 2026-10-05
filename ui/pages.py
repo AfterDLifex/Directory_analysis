@@ -1,5 +1,6 @@
 """
-Page widgets for the main window with glassmorphism aesthetics and smooth animations.
+Page widgets for the main window with glassmorphism aesthetics, SVG vector icons,
+comprehensive deep storage insights, health analytics, and smooth transitions.
 
 Every page exposes ``set_result(result)`` so the main window can push a
 fresh :class:`AnalysisResult` into it after each scan.
@@ -9,12 +10,12 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from PySide6.QtCore import (
-    QEasingCurve, QParallelAnimationGroup, QPropertyAnimation,
-    QSequentialAnimationGroup, Qt, QTimer,
+    QEasingCurve, QPropertyAnimation, Qt,
 )
+from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import (
     QCheckBox, QFileDialog, QFrame, QGraphicsOpacityEffect, QGridLayout,
     QGroupBox, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem,
@@ -23,6 +24,7 @@ from PySide6.QtWidgets import (
 )
 
 from folder_analyzer.models import AnalysisResult
+from .icons import get_category_svg_icon, get_svg_icon, get_svg_pixmap
 
 
 # ---------------------------------------------------------------------------
@@ -30,27 +32,38 @@ from folder_analyzer.models import AnalysisResult
 # ---------------------------------------------------------------------------
 
 class StatCard(QFrame):
-    """A rounded glass card with gradient accent, animated value counters and glow."""
+    """A rounded glass card with gradient accent, animated opacity pulse and SVG icon."""
 
-    def __init__(self, title: str, value: str = "—", subtitle: str = "", parent: QWidget | None = None) -> None:
+    def __init__(self, title: str, value: str = "—", subtitle: str = "",
+                 icon_name: str = "", accent_color: str = "#4f8cff",
+                 parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("StatCard")
-        self._target_number = 0
-        self._current_number = 0
-        self._suffix = ""
-        self._timer: QTimer | None = None
+        self._accent_color = accent_color
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(18, 16, 18, 16)
-        layout.setSpacing(4)
+        layout.setSpacing(6)
+
+        header_row = QHBoxLayout()
+        header_row.setSpacing(8)
+
+        if icon_name:
+            self._icon_lbl = QLabel()
+            self._icon_lbl.setPixmap(get_svg_pixmap(icon_name, size=18, color=accent_color))
+            header_row.addWidget(self._icon_lbl)
+        else:
+            self._icon_lbl = None
 
         self._title = QLabel(title.upper())
         self._title.setObjectName("StatCardTitle")
+        header_row.addWidget(self._title)
+        header_row.addStretch(1)
+        layout.addLayout(header_row)
+
         self._value = QLabel(value)
         self._value.setObjectName("StatCardValue")
         self._value.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        
-        layout.addWidget(self._title)
         layout.addWidget(self._value)
 
         if subtitle:
@@ -62,20 +75,22 @@ class StatCard(QFrame):
 
         layout.addStretch(1)
 
-        # Fade/pop animation on update
+        # Pulse animation on update
         self._effect = QGraphicsOpacityEffect(self)
         self._effect.setOpacity(1.0)
         self.setGraphicsEffect(self._effect)
 
-    def set_value(self, value: str) -> None:
+    def set_value(self, value: str, subtitle: Optional[str] = None) -> None:
         self._value.setText(value)
+        if subtitle is not None and self._sub is not None:
+            self._sub.setText(subtitle)
         self.trigger_pulse_animation()
 
     def trigger_pulse_animation(self) -> None:
         """Play a smooth opacity fade pulse when numbers change."""
         self._anim = QPropertyAnimation(self._effect, b"opacity")
-        self._anim.setDuration(350)
-        self._anim.setStartValue(0.3)
+        self._anim.setDuration(300)
+        self._anim.setStartValue(0.4)
         self._anim.setEndValue(1.0)
         self._anim.setEasingCurve(QEasingCurve.OutCubic)
         self._anim.start()
@@ -96,24 +111,27 @@ def make_table(headers: List[str], stretch_first: bool = True) -> QTableWidget:
     return table
 
 
-def fill_table(table: QTableWidget, rows: List[List[str]]) -> None:
+def fill_table(table: QTableWidget, rows: List[List[Any]]) -> None:
     """Replace the contents of a table with ``rows``."""
     table.setRowCount(0)
     for row in rows:
         index = table.rowCount()
         table.insertRow(index)
-        for col, text in enumerate(row):
-            item = QTableWidgetItem(str(text))
-            if col > 0 and any(char.isdigit() for char in str(text)):
-                item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        for col, val in enumerate(row):
+            if isinstance(val, QTableWidgetItem):
+                item = val
+            else:
+                item = QTableWidgetItem(str(val))
+                if col > 0 and any(char.isdigit() for char in str(val)):
+                    item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
             table.setItem(index, col, item)
     if table.rowCount():
         table.resizeColumnsToContents()
-        table.setColumnWidth(0, max(table.columnWidth(0), 180))
+        table.setColumnWidth(0, max(table.columnWidth(0), 190))
 
 
-def _panel(title: str) -> tuple:
-    """Create a titled glass panel (QGroupBox) with a vertical layout."""
+def _panel(title: str, icon_name: str = "") -> tuple:
+    """Create a titled glass panel (QGroupBox) with a vertical layout and optional SVG icon."""
     box = QGroupBox(title)
     layout = QVBoxLayout(box)
     layout.setContentsMargins(16, 16, 16, 16)
@@ -126,7 +144,7 @@ def _panel(title: str) -> tuple:
 # ---------------------------------------------------------------------------
 
 class OverviewPage(QWidget):
-    """Headline metrics + the biggest file-type buckets with glass styling."""
+    """Headline metrics + storage health + actionable recommendations + file types."""
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -134,19 +152,42 @@ class OverviewPage(QWidget):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(14)
 
+        # 6 Stat cards in grid or row
         cards = QHBoxLayout()
-        cards.setSpacing(14)
-        self.card_files = StatCard("Files", "—", "Total indexed items")
-        self.card_dirs = StatCard("Folders", "—", "Directory branches")
-        self.card_size = StatCard("Storage", "—", "Total disk space")
-        self.card_avg = StatCard("Avg file size", "—", "Calculated mean")
-        self.card_dupes = StatCard("Duplicate waste", "—", "Potential recovery")
+        cards.setSpacing(12)
+        self.card_files = StatCard("Files", "—", "Total indexed items", icon_name="files", accent_color="#38bdf8")
+        self.card_dirs = StatCard("Folders", "—", "Directory branches", icon_name="folder", accent_color="#818cf8")
+        self.card_size = StatCard("Storage", "—", "Total disk space", icon_name="overview", accent_color="#34d399")
+        self.card_avg = StatCard("Avg Size", "—", "Calculated mean", icon_name="charts", accent_color="#a78bfa")
+        self.card_health = StatCard("Health Score", "—", "Storage efficiency", icon_name="health", accent_color="#22c55e")
+        self.card_dupes = StatCard("Duplicate Waste", "—", "Potential recovery", icon_name="duplicates", accent_color="#f87171")
         for card in (self.card_files, self.card_dirs, self.card_size,
-                     self.card_avg, self.card_dupes):
+                     self.card_avg, self.card_health, self.card_dupes):
             cards.addWidget(card, 1)
         root.addLayout(cards)
 
-        panel, layout = _panel("Storage by file type")
+        # Actionable Optimization Banner
+        self.action_box = QFrame()
+        self.action_box.setStyleSheet(
+            "background: rgba(30, 41, 59, 0.7); border: 1px solid rgba(96, 165, 250, 0.3); "
+            "border-radius: 12px; padding: 12px 16px;"
+        )
+        act_lay = QHBoxLayout(self.action_box)
+        act_lay.setContentsMargins(12, 8, 12, 8)
+        act_lay.setSpacing(12)
+
+        self.action_icon = QLabel()
+        self.action_icon.setPixmap(get_svg_pixmap("sparkles", size=24, color="#38bdf8"))
+        act_lay.addWidget(self.action_icon)
+
+        self.action_text = QLabel("Run an analysis on any folder to view immediate storage recovery tips.")
+        self.action_text.setStyleSheet("color: #e2e8f0; font-size: 13px; font-weight: 500;")
+        self.action_text.setWordWrap(True)
+        act_lay.addWidget(self.action_text, 1)
+        root.addWidget(self.action_box)
+
+        # Type table
+        panel, layout = _panel("Storage Distribution by File Extension", icon_name="files")
         self.type_table = make_table(["Extension", "Category", "Files", "Size", "% of storage"])
         layout.addWidget(self.type_table)
         root.addWidget(panel, 1)
@@ -158,30 +199,42 @@ class OverviewPage(QWidget):
         self.card_dirs.set_value("—")
         self.card_size.set_value("—")
         self.card_avg.set_value("—")
-        self.card_dupes.set_value("—")
+        self.card_health.set_value("—", "Storage efficiency")
+        self.card_dupes.set_value("—", "Potential recovery")
+        self.action_text.setText("Run an analysis on any folder to view immediate storage recovery tips.")
         fill_table(self.type_table, [])
 
     def set_result(self, result: AnalysisResult) -> None:
         if not result.has_data:
             self._empty_state()
             return
-        self.card_files.set_value(f"{result.total_files:,}")
+        self.card_files.set_value(f"{result.total_files:,}", f"{result.empty_files_count} zero-byte files")
         self.card_dirs.set_value(f"{result.total_directories:,}")
         self.card_size.set_value(result.total_storage_formatted)
         self.card_avg.set_value(result.avg_file_size_formatted)
+        self.card_health.set_value(f"{result.storage_efficiency_score}/100", result.storage_health_label)
         self.card_dupes.set_value(
-            result.duplicate_wasted_formatted if result.duplicate_groups else "None"
+            result.duplicate_wasted_formatted if result.duplicate_groups else "0 B",
+            f"{len(result.duplicate_groups)} duplicate clusters"
         )
-        rows = [
-            [
-                d["label"],
+
+        if result.actionable_recommendations:
+            top_rec = result.actionable_recommendations[0]
+            self.action_text.setText(f"💡 <b>Recommendation ({top_rec['type']}):</b> {top_rec['title']} — {top_rec['action']}")
+        else:
+            self.action_text.setText(f"✨ <b>Optimal Layout:</b> Directory storage is well organized with no detected duplicate waste.")
+
+        rows = []
+        for d in result.file_types:
+            icon = get_category_svg_icon(d["category"], size=16)
+            item_ext = QTableWidgetItem(icon, "  " + d["label"])
+            rows.append([
+                item_ext,
                 d["category"],
                 f"{d['files']:,}",
                 d["size_formatted"],
                 f"{d['percentage']}%",
-            ]
-            for d in result.file_types
-        ]
+            ])
         fill_table(self.type_table, rows)
 
 
@@ -262,7 +315,7 @@ def _bars(entries: List[Dict[str, Any]], value_key: str = "size",
 
 
 class ChartsPage(QWidget):
-    """Live charts: file types, categories, directories, age and size."""
+    """Live visual analytics: types, categories, directory hotspots, age & size distribution."""
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -282,15 +335,15 @@ class ChartsPage(QWidget):
                      self._view_age, self._view_size):
             view.setRenderHint(QPainter.RenderHint.Antialiasing)
 
-        panel_type, lay_type = _panel("Storage by file type")
+        panel_type, lay_type = _panel("Storage by File Type")
         lay_type.addWidget(self._view_type)
-        panel_cat, lay_cat = _panel("Storage by category")
+        panel_cat, lay_cat = _panel("Storage by Category")
         lay_cat.addWidget(self._view_cat)
-        panel_dirs, lay_dirs = _panel("Top directories (largest footprint)")
+        panel_dirs, lay_dirs = _panel("Top Directories (Largest Footprint)")
         lay_dirs.addWidget(self._view_dirs)
-        panel_age, lay_age = _panel("File age distribution")
+        panel_age, lay_age = _panel("File Age Distribution (Recency)")
         lay_age.addWidget(self._view_age)
-        panel_size, lay_size = _panel("File size distribution")
+        panel_size, lay_size = _panel("File Size Distribution (Scale)")
         lay_size.addWidget(self._view_size)
 
         root.addWidget(panel_type, 0, 0)
@@ -318,7 +371,7 @@ class ChartsPage(QWidget):
 # ---------------------------------------------------------------------------
 
 class FilesPage(QWidget):
-    """Largest and oldest files, side by side in tabs."""
+    """Largest files, oldest files, and 0-byte orphan files in tabbed glass tables."""
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -328,16 +381,31 @@ class FilesPage(QWidget):
         tabs = QTabWidget()
         self.table_largest = make_table(["Name", "Location", "Type", "Size", "Modified"])
         self.table_oldest = make_table(["Name", "Location", "Type", "Size", "Modified"])
+        self.table_empty = make_table(["Name", "Location", "Type", "Size", "Modified"])
+
         tabs.addTab(self.table_largest, "Largest files")
         tabs.addTab(self.table_oldest, "Oldest files")
+        tabs.addTab(self.table_empty, "0-Byte Empty files")
         root.addWidget(tabs)
 
     def set_result(self, result: AnalysisResult) -> None:
-        def rows(records):
-            return [[r["icon"] + "  " + r["name"], r["parent"], r["type"],
-                     r["size_formatted"], r["modified_formatted"]] for r in records]
-        fill_table(self.table_largest, rows(result.largest_files))
-        fill_table(self.table_oldest, rows(result.oldest_files))
+        def build_rows(records):
+            output = []
+            for r in records:
+                cat = r.get("type", "Other") if isinstance(r, dict) else r.type
+                name = r.get("name", "") if isinstance(r, dict) else r.name
+                parent = r.get("parent", "") if isinstance(r, dict) else r.parent
+                size_str = r.get("size_formatted", "") if isinstance(r, dict) else r.size_formatted
+                mod_str = r.get("modified_formatted", "") if isinstance(r, dict) else r.modified_formatted
+
+                icon = get_category_svg_icon(cat, size=16)
+                name_item = QTableWidgetItem(icon, "  " + name)
+                output.append([name_item, parent, cat, size_str, mod_str])
+            return output
+
+        fill_table(self.table_largest, build_rows(result.largest_files))
+        fill_table(self.table_oldest, build_rows(result.oldest_files))
+        fill_table(self.table_empty, build_rows(result.empty_files_list))
 
 
 # ---------------------------------------------------------------------------
@@ -345,7 +413,7 @@ class FilesPage(QWidget):
 # ---------------------------------------------------------------------------
 
 class DuplicatesPage(QWidget):
-    """Duplicate groups with wasted-space summary."""
+    """Duplicate groups with wasted-space summary using SVG vector icons."""
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -353,14 +421,14 @@ class DuplicatesPage(QWidget):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(14)
 
-        panel, layout = _panel("Duplicate Storage Detection")
+        panel, layout = _panel("Duplicate Storage Detection & Recovery", icon_name="duplicates")
         self.summary = QLabel("No duplicate detection has been run yet.")
         self.summary.setWordWrap(True)
         self.summary.setStyleSheet("color: #94a3b8; font-size: 13px; font-weight: 500;")
         layout.addWidget(self.summary)
 
         self.tree = QTreeWidget()
-        self.tree.setHeaderLabels(["Copy", "Location", "Size", "Modified"])
+        self.tree.setHeaderLabels(["File / Redundant Copy", "Location", "Size", "Modified"])
         self.tree.setAlternatingRowColors(True)
         self.tree.setWordWrap(False)
         self.tree.setRootIsDecorated(True)
@@ -378,18 +446,23 @@ class DuplicatesPage(QWidget):
             f"approximately {result.duplicate_wasted_formatted} could be recovered "
             f"by keeping one copy of each group."
         )
+        group_icon = get_svg_icon("duplicates", color="#f87171", size=16)
         for group in result.duplicate_groups:
             top = QTreeWidgetItem([
-                f"🗂 {group['count']} copies · {group['size_formatted']} each",
+                f"{group['count']} copies · {group['size_formatted']} each",
                 f"Wasted space: {group['wasted_formatted']}", "", "",
             ])
+            top.setIcon(0, group_icon)
             top.setFirstColumnSpanned(True)
             self.tree.addTopLevelItem(top)
             for f in group["files"]:
-                top.addChild(QTreeWidgetItem([
-                    f["icon"] + "  " + f["name"], f["parent"],
+                file_icon = get_category_svg_icon(f.get("type", "Other"), size=16)
+                child = QTreeWidgetItem([
+                    "  " + f["name"], f["parent"],
                     f["size_formatted"], f["modified_formatted"],
-                ]))
+                ])
+                child.setIcon(0, file_icon)
+                top.addChild(child)
         self.tree.expandToDepth(0)
 
 
@@ -398,7 +471,7 @@ class DuplicatesPage(QWidget):
 # ---------------------------------------------------------------------------
 
 class InsightsPage(QWidget):
-    """Key insights, warnings and a text tree."""
+    """Storage health, actionable optimization recommendations, key insights & hierarchy tree."""
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -406,14 +479,24 @@ class InsightsPage(QWidget):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(14)
 
-        panel, layout = _panel("Key Insights & Recommendations")
-        self.insights = QListWidget()
-        self.insights.setAlternatingRowColors(True)
-        self.insights.setStyleSheet("border: none; background: transparent; padding: 4px;")
-        layout.addWidget(self.insights)
-        root.addWidget(panel, 2)
+        # Optimization recommendations panel
+        panel_rec, lay_rec = _panel("Actionable Optimization Recommendations", icon_name="sparkles")
+        self.rec_list = QListWidget()
+        self.rec_list.setStyleSheet(
+            "border: none; background: transparent; font-size: 13px; line-height: 1.5;"
+        )
+        lay_rec.addWidget(self.rec_list)
+        root.addWidget(panel_rec, 2)
 
-        panel2, layout2 = _panel("Directory Tree (Top Level)")
+        # Observations & Diagnostics
+        panel_ins, lay_ins = _panel("Key Insights & Storage Telemetry", icon_name="insights")
+        self.insights = QListWidget()
+        self.insights.setStyleSheet("border: none; background: transparent; padding: 4px;")
+        lay_ins.addWidget(self.insights)
+        root.addWidget(panel_ins, 2)
+
+        # Directory tree preview
+        panel2, layout2 = _panel("Directory Hierarchy Tree (Top Level)", icon_name="folder")
         self.tree_view = QLabel()
         self.tree_view.setTextFormat(Qt.PlainText)
         self.tree_view.setWordWrap(False)
@@ -422,7 +505,7 @@ class InsightsPage(QWidget):
             "font-size: 12px; color: #93c5fd; padding: 12px; "
             "background: rgba(10, 15, 26, 0.85); border-radius: 8px;")
         layout2.addWidget(self.tree_view)
-        root.addWidget(panel2, 1)
+        root.addWidget(panel2, 2)
 
         self.warnings = QLabel()
         self.warnings.setWordWrap(True)
@@ -430,10 +513,29 @@ class InsightsPage(QWidget):
         root.addWidget(self.warnings)
 
     def set_result(self, result: AnalysisResult) -> None:
+        # Recommendations
+        self.rec_list.clear()
+        rec_icon = get_svg_icon("sparkles", color="#38bdf8", size=16)
+        crit_icon = get_svg_icon("warning", color="#ef4444", size=16)
+        if result.actionable_recommendations:
+            for rec in result.actionable_recommendations:
+                item = QListWidgetItem(f"[{rec['type']}] {rec['title']} — {rec['action']}")
+                item.setIcon(crit_icon if rec["type"] == "Critical" else rec_icon)
+                self.rec_list.addItem(item)
+        else:
+            item = QListWidgetItem("No storage warnings. Everything is in optimal condition.")
+            item.setIcon(get_svg_icon("check", color="#22c55e", size=16))
+            self.rec_list.addItem(item)
+
+        # Key insights
         self.insights.clear()
+        check_icon = get_svg_icon("check", color="#60a5fa", size=16)
         for ins in result.key_insights:
-            item = QListWidgetItem("✓  " + ins.replace("**", ""))
+            item = QListWidgetItem("  " + ins.replace("**", ""))
+            item.setIcon(check_icon)
             self.insights.addItem(item)
+
+        # Tree & warnings
         self.tree_view.setText(result.tree_text or "—")
         self.warnings.setText(" ⚠️  " + " · ".join(result.warnings) if result.warnings else "")
 
@@ -452,11 +554,11 @@ class ExportPage(QWidget):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(14)
 
-        panel, layout = _panel("Export Analytics & Reports")
+        panel, layout = _panel("Export Analytics & Reports", icon_name="export")
         
         desc = QLabel(
             "Select which professional report formats to generate. Reports include self-contained "
-            "glassmorphic dashboards, charts, and clean structured data."
+            "glassmorphic dashboards, charts, storage health telemetry, and structured data."
         )
         desc.setWordWrap(True)
         desc.setStyleSheet("color: #94a3b8; font-size: 12px; margin-bottom: 8px;")
@@ -464,11 +566,11 @@ class ExportPage(QWidget):
 
         self._checks: dict = {}
         formats = [
-            ("html", "📊 HTML Interactive Glass Dashboard (self-contained, offline charts)"),
-            ("md", "📝 Markdown Executive Summary (formatted tables & insights)"),
-            ("json", "⚙️ JSON Structured Data (full telemetry & tree)"),
-            ("csv", "📑 CSV File-Type Breakdown (for Excel / BI tools)"),
-            ("txt", "📄 Plain-Text Executive Summary"),
+            ("html", "HTML Interactive Glass Dashboard (self-contained, offline SVG charts)"),
+            ("md", "Markdown Executive Summary (formatted tables, health & insights)"),
+            ("json", "JSON Structured Data (full telemetry, empty files & tree)"),
+            ("csv", "CSV File-Type Breakdown (for Excel / PowerBI)"),
+            ("txt", "Plain-Text Executive Summary"),
         ]
         for key, label in formats:
             cb = QCheckBox(label)
@@ -483,19 +585,21 @@ class ExportPage(QWidget):
             "Output directory (defaults to 'folder_analysis' inside scanned folder)")
         browse = QPushButton("Browse…")
         browse.setObjectName("BrowseButton")
+        browse.setIcon(get_svg_icon("folder", color="#cbd5e1", size=16))
         browse.clicked.connect(self._browse)
         row.addWidget(self.dir_edit, 1)
         row.addWidget(browse)
         layout.addLayout(row)
 
-        self.export_btn = QPushButton("🚀 Generate & Export Reports")
+        self.export_btn = QPushButton(" Generate & Export Reports")
         self.export_btn.setObjectName("RunButton")
+        self.export_btn.setIcon(get_svg_icon("export", color="#ffffff", size=18))
         self.export_btn.clicked.connect(self._export)
         layout.addWidget(self.export_btn)
         root.addWidget(panel)
 
         # Status panel
-        status_panel, stat_lay = _panel("Export Status & Output Files")
+        status_panel, stat_lay = _panel("Export Status & Output Files", icon_name="check")
         self.status = QLabel("Ready — run a scan and select formats to export.")
         self.status.setWordWrap(True)
         self.status.setTextInteractionFlags(Qt.TextSelectableByMouse)
@@ -504,6 +608,7 @@ class ExportPage(QWidget):
 
         self.open_dir_btn = QPushButton("Open Output Folder")
         self.open_dir_btn.setObjectName("SecondaryButton")
+        self.open_dir_btn.setIcon(get_svg_icon("folder", color="#60a5fa", size=16))
         self.open_dir_btn.setVisible(False)
         self.open_dir_btn.clicked.connect(self._open_output_folder)
         stat_lay.addWidget(self.open_dir_btn)
@@ -563,11 +668,11 @@ class ExportPage(QWidget):
                 else:
                     written.append(func(self.result, path))
             
-            output_msg = f"✅ Successfully exported {len(written)} report(s) to:\n{base}\n\n"
+            output_msg = f"Successfully exported {len(written)} report(s) to:\n{base}\n\n"
             for p in written:
                 output_msg += f"  • {os.path.basename(p)} ({os.path.getsize(p):,} bytes)\n"
             self.status.setText(output_msg)
             self.open_dir_btn.setVisible(True)
         except Exception as exc:
-            self.status.setText(f"❌ Export failed: {exc}")
+            self.status.setText(f"Export failed: {exc}")
             self.open_dir_btn.setVisible(False)
