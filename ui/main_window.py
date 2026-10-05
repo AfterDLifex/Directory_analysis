@@ -1,12 +1,4 @@
-"""
-Main window: command bar, sidebar navigation, stacked pages with fade
-transitions, toast notifications and keyboard shortcuts.
-
-Now includes additional navigation:
-- File Viewer (preview any file in-app)
-- Timeline (temporal analytics)
-- Advanced Analytics (filename dupes, junk, deep nesting, long paths)
-"""
+"""Main window: command bar, sidebar nav, stacked pages, toasts, shortcuts."""
 
 from __future__ import annotations
 
@@ -153,8 +145,6 @@ class MainWindow(QWidget):
         self._toast = Toast(self)
         self._toast.setVisible(False)
 
-    # -- UI construction -----------------------------------------------------
-
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -178,18 +168,17 @@ class MainWindow(QWidget):
 
         self.nav.currentRowChanged.connect(self._on_nav_changed)
         self.nav.setCurrentRow(0)
-
-        # Wire "open in viewer" callbacks
         self._wire_viewer_callbacks()
 
     def _wire_viewer_callbacks(self) -> None:
-        viewer_page = self.pages[4]  # File Viewer
-        files_page = self.pages[3]   # File Explorer
+        viewer_page = self.pages[4]
+        files_page = self.pages[3]
         advanced_page = self.pages[6]
 
         def open_in_viewer(path: str) -> None:
-            viewer_page.open_path(path)
-            self._set_nav(4)
+            if isinstance(viewer_page, FileViewerPage):
+                viewer_page.open_path(path)
+                self._set_nav(4)
 
         if isinstance(files_page, FilesPage):
             files_page.set_viewer_callback(open_in_viewer)
@@ -217,10 +206,8 @@ class MainWindow(QWidget):
         title_box.addWidget(sub)
         layout.addLayout(title_box)
 
-        sep1 = QFrame()
-        sep1.setObjectName("TopBarSeparator")
-        sep1.setFrameShape(QFrame.VLine)
-        sep1.setFixedHeight(34)
+        sep1 = QFrame(); sep1.setObjectName("TopBarSeparator")
+        sep1.setFrameShape(QFrame.VLine); sep1.setFixedHeight(34)
         layout.addWidget(sep1)
 
         self.path_edit = QLineEdit()
@@ -251,10 +238,8 @@ class MainWindow(QWidget):
         self.cancel_btn.setToolTip("Cancel the running scan  (Esc)")
         layout.addWidget(self.cancel_btn)
 
-        sep2 = QFrame()
-        sep2.setObjectName("TopBarSeparator")
-        sep2.setFrameShape(QFrame.VLine)
-        sep2.setFixedHeight(34)
+        sep2 = QFrame(); sep2.setObjectName("TopBarSeparator")
+        sep2.setFrameShape(QFrame.VLine); sep2.setFixedHeight(34)
         layout.addWidget(sep2)
 
         self.export_btn_top = self._icon_button("export", "#cbd5e1",
@@ -266,7 +251,6 @@ class MainWindow(QWidget):
                                           "Keyboard shortcuts  (?)")
         self.help_btn.clicked.connect(self._show_shortcuts)
         layout.addWidget(self.help_btn)
-
         return bar
 
     def _icon_button(self, icon_name: str, color: str, tooltip: str) -> QPushButton:
@@ -307,21 +291,15 @@ class MainWindow(QWidget):
         sv.setContentsMargins(12, 10, 12, 10)
         sv.setSpacing(2)
 
-        l1 = QLabel("TOTAL INDEXED")
-        l1.setObjectName("SidebarStatLabel")
+        l1 = QLabel("TOTAL INDEXED"); l1.setObjectName("SidebarStatLabel")
         sv.addWidget(l1)
-
-        self.sidebar_total = QLabel("—")
-        self.sidebar_total.setObjectName("SidebarStatValue")
+        self.sidebar_total = QLabel("—"); self.sidebar_total.setObjectName("SidebarStatValue")
         sv.addWidget(self.sidebar_total)
 
-        l2 = QLabel("DUPLICATE WASTE")
-        l2.setObjectName("SidebarStatLabel")
+        l2 = QLabel("DUPLICATE WASTE"); l2.setObjectName("SidebarStatLabel")
         l2.setContentsMargins(0, 6, 0, 0)
         sv.addWidget(l2)
-
-        self.sidebar_waste = QLabel("—")
-        self.sidebar_waste.setObjectName("SidebarStatValue")
+        self.sidebar_waste = QLabel("—"); self.sidebar_waste.setObjectName("SidebarStatValue")
         sv.addWidget(self.sidebar_waste)
 
         lay.addWidget(stats)
@@ -343,8 +321,7 @@ class MainWindow(QWidget):
         layout.setContentsMargins(20, 8, 20, 8)
         layout.setSpacing(14)
 
-        self.status_dot = QLabel("●")
-        self.status_dot.setObjectName("StatusDot")
+        self.status_dot = QLabel("●"); self.status_dot.setObjectName("StatusDot")
         self.status_dot.setProperty("state", "idle")
         layout.addWidget(self.status_dot)
 
@@ -360,20 +337,16 @@ class MainWindow(QWidget):
         self.progress.setTextVisible(False)
         self.progress.setFixedHeight(6)
         self.progress.setFixedWidth(220)
-        self.progress.setRange(0, 1)
-        self.progress.setValue(0)
+        self.progress.setRange(0, 1); self.progress.setValue(0)
         layout.addWidget(self.progress)
 
-        self.status_meta = QLabel("")
-        self.status_meta.setObjectName("StatusMeta")
+        self.status_meta = QLabel(""); self.status_meta.setObjectName("StatusMeta")
         layout.addWidget(self.status_meta)
-
         return bar
 
     def _install_shortcuts(self) -> None:
         def sc(seq, handler):
             QShortcut(QKeySequence(seq), self, activated=handler)
-
         sc("Ctrl+O", self._browse)
         sc("F5", self.start_scan)
         sc("Ctrl+R", self.start_scan)
@@ -382,8 +355,6 @@ class MainWindow(QWidget):
         for i in range(len(PAGE_DEFS)):
             sc(f"Ctrl+{i + 1}", lambda idx=i: self._set_nav(idx))
         sc("?", self._show_shortcuts)
-
-    # -- navigation helpers --------------------------------------------------
 
     def _on_nav_changed(self, index: int) -> None:
         if 0 <= index < self.stack.count():
@@ -398,8 +369,6 @@ class MainWindow(QWidget):
             if icon == key or title.lower().startswith(key):
                 self._set_nav(i)
                 return
-
-    # -- actions -------------------------------------------------------------
 
     def _browse(self) -> None:
         start = self.path_edit.text().strip() or os.path.expanduser("~")
@@ -449,8 +418,6 @@ class MainWindow(QWidget):
             self._worker.cancel()
             self._set_status("warn", "warning", "Cancelling scan…")
 
-    # -- worker signal handlers ---------------------------------------------
-
     def _on_progress(self, files: int, dirs: int) -> None:
         self.status_label.setText(
             f"Scanning — {files:,} files · {dirs:,} folders discovered")
@@ -466,14 +433,12 @@ class MainWindow(QWidget):
             f"{result.total_storage_formatted} · "
             f"Health: {result.storage_efficiency_score}/100 "
             f"({result.storage_health_label}) · "
-            f"{result.scan_duration_seconds}s"
-        )
+            f"{result.scan_duration_seconds}s")
         if result.duplicate_groups:
             summary += f" · Wasted: {result.duplicate_wasted_formatted}"
 
         self._set_status("ok", "check", summary)
         self.status_meta.setText(f"{len(result.duplicate_groups)} dup. groups")
-
         self.sidebar_total.setText(
             f"{result.total_files:,} / {result.total_storage_formatted}")
         self.sidebar_waste.setText(
@@ -503,16 +468,12 @@ class MainWindow(QWidget):
         self._teardown_worker()
         self._set_busy(False)
 
-    # -- helpers -------------------------------------------------------------
-
     def _set_status(self, state: str, icon_name: str, text: str) -> None:
         self.status_dot.setProperty("state", state)
         self.status_dot.style().unpolish(self.status_dot)
         self.status_dot.style().polish(self.status_dot)
-        colors = {
-            "idle": "#64748b", "running": "#00d2ff",
-            "ok": "#22c55e", "warn": "#f59e0b", "error": "#ef4444",
-        }
+        colors = {"idle": "#64748b", "running": "#00d2ff",
+                  "ok": "#22c55e", "warn": "#f59e0b", "error": "#ef4444"}
         self.status_icon.setPixmap(
             get_svg_pixmap(icon_name, size=15, color=colors.get(state, "#60a5fa")))
         self.status_label.setText(text)
@@ -520,8 +481,7 @@ class MainWindow(QWidget):
     def _show_shortcuts(self) -> None:
         self._toast.show_message(
             "Ctrl+O browse · F5 scan · Esc stop · Ctrl+E export · "
-            "Ctrl+1-9 pages · ? help",
-            "info", ms=4200)
+            "Ctrl+1-9 pages · ? help", "info", ms=4200)
 
     def _teardown_worker(self) -> None:
         if self._thread is not None:

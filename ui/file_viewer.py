@@ -1,27 +1,21 @@
-"""
-In-app file viewer widget.
-
-Provides a preview for text, code, images, and a hex dump for binaries.
-Falls back to metadata-only view for very large or unsupported files.
-"""
+"""In-app file viewer: text, image, and hex dump preview."""
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
-from PySide6.QtCore import QSize, Qt
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont, QPixmap
 from PySide6.QtWidgets import (
-    QFrame, QHBoxLayout, QLabel, QPlainTextEdit, QScrollArea, QSizePolicy,
-    QSplitter, QTextEdit, QVBoxLayout, QWidget,
+    QFrame, QHBoxLayout, QLabel, QPlainTextEdit, QScrollArea, QVBoxLayout,
+    QWidget,
 )
 
 from .icons import get_svg_pixmap
 
-MAX_TEXT_BYTES = 2 * 1024 * 1024        # 2 MB of text is plenty to preview
-MAX_IMAGE_BYTES = 20 * 1024 * 1024      # 20 MB image preview cap
-MAX_HEX_BYTES = 64 * 1024               # 64 KB hex dump
+MAX_TEXT_BYTES = 2 * 1024 * 1024
+MAX_IMAGE_BYTES = 20 * 1024 * 1024
+MAX_HEX_BYTES = 64 * 1024
 
 _IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".ico"}
 _TEXT_EXTS = {
@@ -35,8 +29,6 @@ _TEXT_EXTS = {
 
 
 class FileViewer(QWidget):
-    """Live preview panel — binds to a path and renders accordingly."""
-
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._current_path: str | None = None
@@ -45,7 +37,6 @@ class FileViewer(QWidget):
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(10)
 
-        # Header info strip
         self.header = QFrame()
         self.header.setObjectName("InsightCard")
         self.header.setProperty("severity", "info")
@@ -60,8 +51,7 @@ class FileViewer(QWidget):
         info_box = QVBoxLayout()
         info_box.setSpacing(1)
         self.file_name = QLabel("No file selected")
-        self.file_name.setStyleSheet(
-            "color: #ffffff; font-size: 13px; font-weight: 700;")
+        self.file_name.setStyleSheet("color: #ffffff; font-size: 13px; font-weight: 700;")
         self.file_meta = QLabel("Pick any file from the tree or tables to preview it here.")
         self.file_meta.setStyleSheet("color: #8da2c0; font-size: 11px;")
         info_box.addWidget(self.file_name)
@@ -69,7 +59,6 @@ class FileViewer(QWidget):
         hl.addLayout(info_box, 1)
         outer.addWidget(self.header)
 
-        # Body stack — text | image | hex | message
         self.body = QFrame()
         self.body.setObjectName("GlassPanel")
         bl = QVBoxLayout(self.body)
@@ -81,7 +70,7 @@ class FileViewer(QWidget):
         self.text_view.setFont(QFont("JetBrains Mono", 10))
         self.text_view.setStyleSheet(
             "background: rgba(10,15,26,0.9); color: #e2e8f0; "
-            "border: none; padding: 12px; selection-background-color: #2563eb;")
+            "border: none; padding: 12px;")
 
         self.image_area = QScrollArea()
         self.image_area.setWidgetResizable(True)
@@ -94,27 +83,22 @@ class FileViewer(QWidget):
         self.message = QLabel("")
         self.message.setAlignment(Qt.AlignCenter)
         self.message.setWordWrap(True)
-        self.message.setStyleSheet(
-            "color: #64748b; font-size: 13px; padding: 40px;")
+        self.message.setStyleSheet("color: #64748b; font-size: 13px; padding: 40px;")
 
         for w in (self.text_view, self.image_area, self.message):
             bl.addWidget(w)
             w.setVisible(False)
 
         outer.addWidget(self.body, 1)
-
-    # -- public API --------------------------------------------------------
+        self.clear()
 
     def clear(self) -> None:
         self._current_path = None
         self.file_name.setText("No file selected")
-        self.file_meta.setText(
-            "Pick any file from the tree or tables to preview it here.")
-        self.file_icon.setPixmap(get_svg_pixmap("files", size=18, color="#93c5fd"))
+        self.file_meta.setText("Pick any file from the tree or tables to preview it here.")
         self._show_message("No file selected.")
 
     def load_file(self, path: str) -> None:
-        """Attempt to render ``path`` in the most appropriate viewer."""
         self._current_path = path
         p = Path(path)
 
@@ -122,7 +106,6 @@ class FileViewer(QWidget):
             self._show_message(f"File not found: {path}")
             self._set_header(p.name, "Missing on disk", "warning")
             return
-
         try:
             st = p.stat()
         except OSError as exc:
@@ -133,10 +116,8 @@ class FileViewer(QWidget):
         size = st.st_size
         ext = p.suffix.lower()
         size_str = _human_size(size)
-        parent = str(p.parent)
-        self._set_header(p.name, f"{size_str}  ·  {parent}", "info")
+        self._set_header(p.name, f"{size_str}  ·  {p.parent}", "info")
 
-        # --- Pick a renderer ---
         if ext in _IMAGE_EXTS and size <= MAX_IMAGE_BYTES:
             self._render_image(p)
             return
@@ -147,14 +128,10 @@ class FileViewer(QWidget):
             self._render_hex(p)
             return
 
-        # Too big / unknown
         self._show_message(
             f"Preview not available for this file.\n\n"
             f"Size: {size_str}\nType: {ext or 'unknown'}\n"
-            f"Open it externally to view its contents."
-        )
-
-    # -- renderers ---------------------------------------------------------
+            f"Open it externally to view its contents.")
 
     def _render_text(self, p: Path) -> None:
         try:
@@ -185,7 +162,6 @@ class FileViewer(QWidget):
         except OSError as exc:
             self._show_message(f"Failed to read binary: {exc}")
             return
-
         lines = []
         for off in range(0, len(data), 16):
             chunk = data[off:off + 16]
@@ -195,8 +171,6 @@ class FileViewer(QWidget):
         self._switch_to(self.text_view)
         self.text_view.setPlainText(
             f"[hex preview — first {len(data):,} bytes]\n\n" + "\n".join(lines))
-
-    # -- helpers -----------------------------------------------------------
 
     def _switch_to(self, widget: QWidget) -> None:
         for w in (self.text_view, self.image_area, self.message):
@@ -214,10 +188,6 @@ class FileViewer(QWidget):
         self.header.style().polish(self.header)
 
 
-# ---------------------------------------------------------------------------
-# small utilities
-# ---------------------------------------------------------------------------
-
 def _human_size(n: int) -> str:
     for unit in ("B", "KB", "MB", "GB", "TB"):
         if n < 1024:
@@ -227,7 +197,6 @@ def _human_size(n: int) -> str:
 
 
 def _looks_like_text(p: Path, ext: str) -> bool:
-    """Sniff the first KB to decide if a file is text-like."""
     if ext in _TEXT_EXTS:
         return True
     if ext == "":
@@ -239,7 +208,5 @@ def _looks_like_text(p: Path, ext: str) -> bool:
         return False
     if b"\x00" in chunk:
         return False
-    # Count "printable-ish" bytes
-    printable = sum(1 for b in chunk
-                    if 9 <= b <= 13 or 32 <= b < 127 or b >= 128)
+    printable = sum(1 for b in chunk if 9 <= b <= 13 or 32 <= b < 127 or b >= 128)
     return printable / max(len(chunk), 1) > 0.85
