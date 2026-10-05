@@ -1,4 +1,4 @@
-﻿"""
+"""
 Reusable, theme-aware UI components.
 
 These replace the ad-hoc widget construction that previously lived inside
@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
 )
 
 from .animations import count_up, reduced_motion
-from .icons import get_svg_icon, get_svg_pixmap
+from .icons import get_category_svg_icon, get_svg_icon, get_svg_pixmap
 from .theme import ThemeManager, ThemeTokens
 
 

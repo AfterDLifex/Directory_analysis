@@ -359,18 +359,20 @@ def _qss_nav(t: ThemeTokens) -> str:
     background: transparent;
     border: 1px solid transparent;
     font-weight: 600;
+    outline: 0;
 }}
 #NavList::item:hover {{
     background: {t.hover}; color: {t.text_strong};
     border: 1px solid {t.border};
 }}
-#NavList::item:selected, #NavList::item:selected:focus {{
+#NavList::item:selected, #NavList::item:selected:focus, #NavList::item:selected:active {{
     background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
         stop:0 {_hex_to_rgba(t.accent, 0.30)},
         stop:1 {_hex_to_rgba(t.accent_2, 0.16)});
     color: {t.text_strong};
     border: 1px solid {_hex_to_rgba(t.accent, 0.55)};
     font-weight: 700;
+    outline: 0;
 }}
 #NavHint {{
     color: {t.text_faint}; font-size: {t.fs_micro}px;
@@ -497,6 +499,7 @@ QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox, QPlainTextEdit, QTextEdit {{
     font-size: {t.fs_body}px;
     selection-background-color: {t.accent};
     selection-color: {t.accent_text};
+    placeholder-text-color: {t.text_muted};
 }}
 QLineEdit:hover, QComboBox:hover, QSpinBox:hover {{
     border-color: {_hex_to_rgba(t.accent, 0.40)};

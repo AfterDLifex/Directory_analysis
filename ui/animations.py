@@ -1,4 +1,4 @@
-﻿"""
+"""
 Reusable animation helpers.
 
 Every helper is small and idempotent so widgets can call them from
@@ -189,11 +189,20 @@ def height_reveal(widget: QWidget, duration: int = SLOW) -> Optional[QPropertyAn
 
 
 def stagger_in(widgets: Iterable[QWidget], duration: int = NORMAL,
-               step: int = STAGGER_STEP, horizontal: bool = False) -> None:
-    """Fade/slide a row or grid of widgets in one after another."""
-    for i, w in enumerate(widgets):
+               step: int = STAGGER_STEP, horizontal: bool = False,
+               max_items: int = 20) -> None:
+    """Fade/slide a row or grid of widgets in one after another.
+
+    ``max_items`` limits how many timers are queued so that large lists (e.g.
+    insight cards) don't create hundreds of pending callbacks that slow the
+    event loop.
+    """
+    items = list(widgets)[:max_items]
+    # Clamp step so total animation window stays ≤ 600ms.
+    actual_step = min(step, 600 // max(len(items), 1)) if items else step
+    for i, w in enumerate(items):
         slide_in(w, offset=10, duration=duration,
-                 horizontal=horizontal, start_delay=i * step)
+                 horizontal=horizontal, start_delay=i * actual_step)
 
 
 # ---------------------------------------------------------------------------
@@ -206,6 +215,7 @@ class AnimatedStackedWidget(QStackedWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._anim: Optional[QPropertyAnimation] = None
+        self._fade_anim: Optional[QPropertyAnimation] = None
 
     def setCurrentIndex(self, index: int) -> None:  # noqa: N802
         if index < 0 or index >= self.count():
@@ -214,9 +224,16 @@ class AnimatedStackedWidget(QStackedWidget):
         if index == previous:
             return
 
+        # --- stop any running animations cleanly --------------------------
         if self._anim is not None:
             self._anim.stop()
             self._anim = None
+        if self._fade_anim is not None:
+            self._fade_anim.stop()
+            self._fade_anim = None
+
+        # Reset the old widget to fully opaque so it displays correctly if
+        # we navigate back to it later.
         old = self.currentWidget()
         if old is not None:
             old.setGraphicsEffect(None)
@@ -226,16 +243,33 @@ class AnimatedStackedWidget(QStackedWidget):
         if target is None:
             return
 
-        fade_in(target, NORMAL, start=1.0 if reduced_motion() else 0.3)
-        if not reduced_motion():
-            pos = target.pos()
-            anim = QPropertyAnimation(target, b"y", target)
-            anim.setDuration(SLOW)
-            anim.setStartValue(pos.y() + (10 if index > previous else -10))
-            anim.setEndValue(pos.y())
-            anim.setEasingCurve(_ease_out())
-            self._anim = anim
-            anim.start()
+        if reduced_motion():
+            target.setGraphicsEffect(None)
+            return
+
+        # Always start from opacity 0 so the fade is visible on every nav.
+        effect = QGraphicsOpacityEffect(target)
+        effect.setOpacity(0.0)
+        target.setGraphicsEffect(effect)
+
+        fade = QPropertyAnimation(effect, b"opacity", target)
+        fade.setDuration(NORMAL)
+        fade.setStartValue(0.0)
+        fade.setEndValue(1.0)
+        fade.setEasingCurve(_ease_out())
+        fade.start()
+        self._fade_anim = fade
+
+        # Slide from a small offset so there's visible movement.
+        pos = target.pos()
+        offset = 14 if index > previous else -14
+        slide = QPropertyAnimation(target, b"y", target)
+        slide.setDuration(SLOW)
+        slide.setStartValue(pos.y() + offset)
+        slide.setEndValue(pos.y())
+        slide.setEasingCurve(_ease_out())
+        slide.start()
+        self._anim = slide
 
 
 def make_scroll(inner: QWidget) -> QScrollArea:

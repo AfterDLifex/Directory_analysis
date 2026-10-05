@@ -100,6 +100,7 @@ class MainWindow(QWidget):
 
         self._build_ui()
         self.manager = ThemeManager.instance()
+        self.manager.themeChanged.connect(self._on_theme_changed)
         self._wire_overlays()
         self._wire_viewer_callbacks()
         self._install_shortcuts()
@@ -348,20 +349,36 @@ class MainWindow(QWidget):
     # ------------------------------------------------------------------
 
     def _on_nav_row(self, row: int) -> None:
+        """Called by the nav list when the selected row changes.
+
+        The page switch is deferred via ``QTimer.singleShot(0, ...)`` so the
+        sidebar selection highlight is painted by Qt *before* any potentially
+        heavy page rendering runs on the main thread.  This eliminates the
+        freeze/hang symptom when switching to data-heavy pages.
+        """
         key = self._key_for_row.get(row)
-        if key is not None:
-            self.stack.setCurrentIndex(PAGE_KEYS.index(key))
+        if key is None:
+            return
+        page_index = PAGE_KEYS.index(key)
+        QTimer.singleShot(0, lambda: self._switch_stack(page_index, key))
+
+    def _switch_stack(self, page_index: int, key: str) -> None:
+        """Perform the actual stack switch and emit pageChanged."""
+        self.stack.setCurrentIndex(page_index)
+        self.pageChanged.emit(key)
 
     def _goto(self, key: str) -> None:
         """Select the sidebar row for ``key`` (no-op when unknown)."""
         row = self._row_for_key.get(key)
         if row is None:
             return
-        if self.nav.currentRow() != row:
-            self.nav.setCurrentRow(row)
+        if self.nav.currentRow() == row:
+            # Row unchanged → currentRowChanged won't fire, so switch manually.
+            page_index = PAGE_KEYS.index(key)
+            QTimer.singleShot(0, lambda: self._switch_stack(page_index, key))
         else:
-            self.stack.setCurrentIndex(PAGE_KEYS.index(key))
-        self.pageChanged.emit(key)
+            # Setting the row fires currentRowChanged → _on_nav_row handles the rest.
+            self.nav.setCurrentRow(row)
 
     def _goto_page_index(self, index: int) -> None:
         if 0 <= index < len(PAGE_KEYS):
