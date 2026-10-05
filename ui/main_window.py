@@ -1,18 +1,21 @@
 """
-Main window: top bar, sidebar navigation and stacked pages.
+Main window: top bar, sidebar navigation and stacked pages with glassmorphic visuals and smooth animations.
 
 Flow:  choose a folder -> Analyze -> a background ScanWorker streams
-progress -> pages are refreshed with the resulting AnalysisResult.
+progress -> pages are refreshed with animated transitions and counters.
 """
 
 from __future__ import annotations
 
 import os
 
-from PySide6.QtCore import QThread
+from PySide6.QtCore import (
+    QEasingCurve, QParallelAnimationGroup, QPropertyAnimation, QThread, Qt,
+)
 from PySide6.QtWidgets import (
-    QFileDialog, QHBoxLayout, QLabel, QLineEdit, QListWidget, QPushButton,
-    QProgressBar, QStackedWidget, QVBoxLayout, QWidget,
+    QFileDialog, QGraphicsOpacityEffect, QHBoxLayout, QLabel, QLineEdit,
+    QListWidget, QPushButton, QProgressBar, QStackedWidget, QVBoxLayout,
+    QWidget,
 )
 
 from folder_analyzer import __version__
@@ -25,23 +28,50 @@ from .pages import (
 from .scan_worker import ScanWorker
 
 PAGES = [
-    ("Overview", OverviewPage),
-    ("Charts", ChartsPage),
-    ("Files", FilesPage),
-    ("Duplicates", DuplicatesPage),
-    ("Insights", InsightsPage),
-    ("Export", ExportPage),
+    ("📊 Overview", OverviewPage),
+    ("📈 Visual Charts", ChartsPage),
+    ("📁 File Explorer", FilesPage),
+    ("⚠️ Duplicates", DuplicatesPage),
+    ("💡 Deep Insights", InsightsPage),
+    ("🚀 Export Data", ExportPage),
 ]
 
 
+class AnimatedStackedWidget(QStackedWidget):
+    """QStackedWidget that transitions between pages with a smooth fade animation."""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._fade_anim = None
+
+    def setCurrentIndex(self, index: int) -> None:
+        widget = self.widget(index)
+        if not widget:
+            super().setCurrentIndex(index)
+            return
+
+        super().setCurrentIndex(index)
+        effect = QGraphicsOpacityEffect(widget)
+        widget.setGraphicsEffect(effect)
+
+        anim = QPropertyAnimation(effect, b"opacity", self)
+        anim.setDuration(240)
+        anim.setStartValue(0.2)
+        anim.setEndValue(1.0)
+        anim.setEasingCurve(QEasingCurve.OutCubic)
+        self._fade_anim = anim
+        anim.start()
+
+
 class MainWindow(QWidget):
-    """Root application window."""
+    """Root application window with glassmorphism aesthetics and animated transitions."""
 
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle(f"Folder Analysis Pro v{__version__}")
-        self.resize(1180, 760)
-        self.setMinimumSize(960, 640)
+        self.setObjectName("RootContainer")
+        self.resize(1200, 780)
+        self.setMinimumSize(980, 660)
         self._thread: QThread | None = None
         self._worker: ScanWorker | None = None
         self._result = None
@@ -54,13 +84,23 @@ class MainWindow(QWidget):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
         root.addWidget(self._build_top_bar())
+
         body = QHBoxLayout()
         body.setContentsMargins(0, 0, 0, 0)
         body.setSpacing(0)
         body.addWidget(self._build_nav())
-        body.addWidget(self._build_pages(), 1)
+        
+        # Main content area with padding
+        content_container = QWidget()
+        content_layout = QVBoxLayout(content_container)
+        content_layout.setContentsMargins(18, 18, 18, 18)
+        content_layout.setSpacing(0)
+        content_layout.addWidget(self._build_pages())
+
+        body.addWidget(content_container, 1)
         root.addLayout(body, 1)
         root.addWidget(self._build_status_bar())
+
         self.nav.currentRowChanged.connect(self._on_nav_changed)
         self.nav.setCurrentRow(0)
 
@@ -68,23 +108,38 @@ class MainWindow(QWidget):
         bar = QWidget()
         bar.setObjectName("TopBar")
         layout = QHBoxLayout(bar)
-        layout.setContentsMargins(16, 12, 16, 12)
-        layout.setSpacing(10)
+        layout.setContentsMargins(20, 14, 20, 14)
+        layout.setSpacing(12)
 
-        title = QLabel("Folder Analysis Pro")
-        title.setStyleSheet("color:#ffffff; font-size:16px; font-weight:700; padding-right:8px;")
-        layout.addWidget(title)
+        # Brand badge & title
+        badge = QLabel("PRO")
+        badge.setObjectName("AppLogoBadge")
+        layout.addWidget(badge)
 
+        title_box = QVBoxLayout()
+        title_box.setSpacing(1)
+        title = QLabel("Folder Storage Analytics")
+        title.setObjectName("TopBarTitle")
+        sub = QLabel("Glassmorphic Deep Engine")
+        sub.setObjectName("TopBarSubtitle")
+        title_box.addWidget(title)
+        title_box.addWidget(sub)
+        layout.addLayout(title_box)
+
+        layout.addSpacing(16)
+
+        # Folder search bar
         self.path_edit = QLineEdit()
-        self.path_edit.setPlaceholderText("Choose a folder to analyse…")
+        self.path_edit.setPlaceholderText("Select or enter folder path to analyze…")
         self.path_edit.returnPressed.connect(self.start_scan)
         layout.addWidget(self.path_edit, 1)
 
         browse = QPushButton("Browse…")
+        browse.setObjectName("BrowseButton")
         browse.clicked.connect(self._browse)
         layout.addWidget(browse)
 
-        self.analyze_btn = QPushButton("Analyze")
+        self.analyze_btn = QPushButton("⚡ Analyze")
         self.analyze_btn.setObjectName("RunButton")
         self.analyze_btn.clicked.connect(self.start_scan)
         layout.addWidget(self.analyze_btn)
@@ -96,16 +151,23 @@ class MainWindow(QWidget):
         layout.addWidget(self.cancel_btn)
         return bar
 
-    def _build_nav(self) -> QListWidget:
+    def _build_nav(self) -> QWidget:
+        container = QWidget()
+        container.setObjectName("NavContainer")
+        container.setFixedWidth(210)
+        lay = QVBoxLayout(container)
+        lay.setContentsMargins(6, 12, 6, 12)
+        lay.setSpacing(4)
+
         self.nav = QListWidget()
         self.nav.setObjectName("NavList")
-        self.nav.setFixedWidth(190)
         for name, _cls in PAGES:
             self.nav.addItem(name)
-        return self.nav
+        lay.addWidget(self.nav)
+        return container
 
     def _build_pages(self) -> QStackedWidget:
-        self.stack = QStackedWidget()
+        self.stack = AnimatedStackedWidget()
         self.pages = []
         for _name, cls in PAGES:
             page = cls()
@@ -115,16 +177,18 @@ class MainWindow(QWidget):
 
     def _build_status_bar(self) -> QWidget:
         bar = QWidget()
-        bar.setObjectName("TopBar")
+        bar.setObjectName("StatusBar")
         layout = QHBoxLayout(bar)
-        layout.setContentsMargins(16, 8, 16, 8)
-        layout.setSpacing(10)
-        self.status_label = QLabel("Ready — pick a folder and press Analyze.")
+        layout.setContentsMargins(20, 8, 20, 8)
+        layout.setSpacing(14)
+
+        self.status_label = QLabel("✨ Ready — choose a folder and press Analyze.")
         self.progress = QProgressBar()
         self.progress.setTextVisible(False)
         self.progress.setFixedHeight(6)
         self.progress.setRange(0, 1)
         self.progress.setValue(0)
+
         layout.addWidget(self.status_label, 1)
         layout.addWidget(self.progress, 1)
         return bar
@@ -136,7 +200,7 @@ class MainWindow(QWidget):
 
     def _browse(self) -> None:
         start = self.path_edit.text().strip() or os.path.expanduser("~")
-        chosen = QFileDialog.getExistingDirectory(self, "Choose folder to analyse", start)
+        chosen = QFileDialog.getExistingDirectory(self, "Choose folder to analyze", start)
         if chosen:
             self.path_edit.setText(chosen)
             self.start_scan()
@@ -147,7 +211,7 @@ class MainWindow(QWidget):
         text = self.path_edit.text().strip()
         path = os.path.abspath(os.path.expanduser(text)) if text else ""
         if not path or not os.path.isdir(path):
-            self.status_label.setText("Please choose a valid folder first.")
+            self.status_label.setText("⚠️ Please select a valid directory first.")
             return
         cfg = AnalysisConfig(
             folder_path=path,
@@ -158,8 +222,8 @@ class MainWindow(QWidget):
             largest_n=50,
             oldest_n=50,
         )
-        self._set_busy(True, f"Scanning {path} …")
-        self.progress.setRange(0, 0)  # indeterminate "working" pulse
+        self._set_busy(True, f"🔍 Indexing and analyzing {path} …")
+        self.progress.setRange(0, 0)  # indeterminate animated pulse
 
         self._thread = QThread(self)
         self._worker = ScanWorker(cfg)
@@ -174,35 +238,35 @@ class MainWindow(QWidget):
     def cancel_scan(self) -> None:
         if self._worker is not None:
             self._worker.cancel()
-            self.status_label.setText("Cancelling…")
+            self.status_label.setText("Cancelling scan…")
 
     # -- worker signal handlers ------------------------------------------------
 
     def _on_progress(self, files: int, dirs: int) -> None:
-        self.status_label.setText(f"Scanned {files:,} files in {dirs:,} folders…")
+        self.status_label.setText(f"Scanning: {files:,} files discovered across {dirs:,} folders…")
 
     def _on_finished(self, result) -> None:
         self._result = result
         for page in self.pages:
             page.set_result(result)
         summary = (
-            f"{result.root_name}: {result.total_files:,} files · "
+            f"✨ {result.root_name}: {result.total_files:,} files · "
             f"{result.total_storage_formatted} · "
             f"{result.scan_duration_seconds}s scan"
         )
         if result.duplicate_groups:
-            summary += f" · {result.duplicate_wasted_formatted} duplicate waste"
+            summary += f" · ⚠️ {result.duplicate_wasted_formatted} duplicate waste"
         self.status_label.setText(summary)
         self._teardown_worker()
         self._set_busy(False)
 
     def _on_failed(self, message: str) -> None:
-        self.status_label.setText(f"Scan failed: {message}")
+        self.status_label.setText(f"❌ Scan failed: {message}")
         self._teardown_worker()
         self._set_busy(False)
 
     def _on_cancelled(self) -> None:
-        self.status_label.setText("Scan cancelled.")
+        self.status_label.setText("Scan cancelled by user.")
         self._teardown_worker()
         self._set_busy(False)
 
