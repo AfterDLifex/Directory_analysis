@@ -204,7 +204,7 @@ def _bars(entries: list[dict], value_key: str = "size", label_key: str = "name",
     series.setBarWidth(0.55)
 
     axis_x = QBarCategoryAxis()
-    axis_x.append(labels or ["â€”"])
+    axis_x.append(labels or ["—”"])
     axis_x.setLabelsColor(QColor(t.text_dim))
     axis_x.setGridLineVisible(False)
 
@@ -279,20 +279,24 @@ class OverviewPage(Page):
         _scroll, root = self.scroll_body()
 
         self.cards = {
-            "files": StatCard("Files Indexed", "â€”", "0-byte: â€”", "files", "blue"),
-            "dirs": StatCard("Directories", "â€”", "branches scanned",
+            "files": StatCard("Files Indexed", "—”", "0-byte: —”", "files", "blue"),
+            "dirs": StatCard("Directories", "—”", "branches scanned",
                              "folder", "violet"),
-            "size": StatCard("Total Storage", "â€”", "disk footprint",
+            "size": StatCard("Total Storage", "—”", "disk footprint",
                              "hard-drive", "cyan"),
-            "avg": StatCard("Average File", "â€”", "mean size", "charts", "violet"),
-            "health": StatCard("Health Score", "â€”", "storage efficiency",
+            "avg": StatCard("Average File", "—”", "mean size", "charts", "violet"),
+            "health": StatCard("Health Score", "—”", "storage efficiency",
                                "health", "green"),
-            "dupes": StatCard("Duplicate Waste", "â€”", "recoverable",
+            "dupes": StatCard("Duplicate Waste", "—”", "recoverable",
                               "duplicates", "red"),
         }
         self._card_order = ("files", "dirs", "size", "avg", "health", "dupes")
         root.addLayout(self.card_grid(
             [self.cards[k] for k in self._card_order], columns=3))
+
+        # Empty state – shows when no analysis has been run yet
+        self._empty = EmptyState("No data yet", "Run a scan to populate this page", "overview")
+        root.addWidget(self._empty)
 
         self.headline = GlassPanel("Recommended Action", "sparkles",
                                    "Highest-impact fix for this folder")
@@ -310,18 +314,18 @@ class OverviewPage(Page):
 
         panel = GlassPanel("Storage Distribution by File Extension", "files",
                            "Ranked by aggregate size")
-        self.type_badge = panel.set_badge("â€” extensions")
+        self.type_badge = panel.set_badge("—” extensions")
         self.type_table = make_table(
             ["Extension", "Category", "Files", "Size", "% of storage"])
-        panel.add(FilterBar(self.type_table, "Filter extensionsâ€¦"))
+        panel.add(FilterBar(self.type_table, "Filter extensions—¦"))
         panel.add(self.type_table, 1)
         root.addWidget(panel, 1)
 
     def set_empty(self) -> None:
         for key in self._card_order:
-            self.cards[key].set_value("â€”", animate=False)
+            self.cards[key].set_value("—”", animate=False)
         fill_table(self.type_table, [])
-        self.type_badge.setText("â€” extensions")
+        self.type_badge.setText("—” extensions")
         self.headline_text.setText(
             "Run an analysis on any folder to see storage recovery tips.")
 
@@ -339,7 +343,7 @@ class OverviewPage(Page):
 
         score = result.storage_efficiency_score
         trend = ("â†‘ Healthy" if score >= 80
-                 else "â€¢ Fair" if score >= 60 else "â†“ Needs attention")
+                 else "—¢ Fair" if score >= 60 else "â†“ Needs attention")
         self.cards["health"].set_value(f"{score}/100",
                                        result.storage_health_label, trend)
         self.cards["dupes"].set_value(
@@ -474,7 +478,7 @@ class FilesPage(Page):
             wrap_lay = QVBoxLayout(wrap)
             wrap_lay.setContentsMargins(0, 6, 0, 0)
             wrap_lay.setSpacing(8)
-            wrap_lay.addWidget(FilterBar(table, f"Filter {name.lower()} filesâ€¦"))
+            wrap_lay.addWidget(FilterBar(table, f"Filter {name.lower()} files—¦"))
             wrap_lay.addWidget(table, 1)
             self.tabs.addTab(wrap, name)
             _wire_open_in_viewer(table, self._on_open_viewer)
@@ -540,7 +544,7 @@ class FileViewerPage(Page):
         left_lay.setContentsMargins(0, 0, 0, 0)
         left_lay.setSpacing(8)
         self.search = QLineEdit()
-        self.search.setPlaceholderText("Filter files by nameâ€¦")
+        self.search.setPlaceholderText("Filter files by name—¦")
         self.search.setClearButtonEnabled(True)
         self.search.textChanged.connect(self._apply_filter)
         left_lay.addWidget(self.search)
@@ -716,18 +720,18 @@ class DuplicatesPage(Page):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(12)
 
-        self.card_recover = StatCard("Recoverable", "â€”", "by removing copies",
+        self.card_recover = StatCard("Recoverable", "—”", "by removing copies",
                                      "duplicates", "red")
-        self.card_groups = StatCard("Duplicate Groups", "â€”", "identical clusters",
+        self.card_groups = StatCard("Duplicate Groups", "—”", "identical clusters",
                                     "layers", "amber")
-        self.card_files = StatCard("Files Involved", "â€”", "across all groups",
+        self.card_files = StatCard("Files Involved", "—”", "across all groups",
                                    "files", "violet")
         root.addLayout(self.card_grid(
             [self.card_recover, self.card_groups, self.card_files], columns=3))
 
         panel = GlassPanel("Duplicate Storage Detection", "duplicates",
                            "Groups of byte-identical files")
-        self.dup_badge = panel.set_badge("â€” groups")
+        self.dup_badge = panel.set_badge("—” groups")
 
         self.summary = QLabel("No duplicate detection has been run yet.")
         self.summary.setWordWrap(True)
@@ -748,9 +752,9 @@ class DuplicatesPage(Page):
 
     def set_empty(self) -> None:
         self.tree.clear()
-        self.dup_badge.setText("â€” groups")
+        self.dup_badge.setText("—” groups")
         for card in (self.card_recover, self.card_groups, self.card_files):
-            card.set_value("â€”", animate=False)
+            card.set_value("—”", animate=False)
         self.summary.setText("No duplicate detection has been run yet.")
 
     def set_result(self, result: AnalysisResult) -> None:
@@ -769,7 +773,7 @@ class DuplicatesPage(Page):
                 "No duplicate files were found in this directory.")
             return
         self.summary.setText(
-            f"Found <b>{len(groups)}</b> duplicate group(s) â€” approximately "
+            f"Found <b>{len(groups)}</b> duplicate group(s) —” approximately "
             f"<b style='color:#fca5a5'>{result.duplicate_wasted_formatted}</b> "
             f"could be recovered by keeping one copy of each group.")
 
@@ -802,17 +806,17 @@ class AdvancedPage(Page):
         self._viewer_callback: Optional[Callable[[str], None]] = None
         _scroll, root = self.scroll_body()
 
-        self.card_junk = StatCard("Junk Candidates", "â€”", "temp / cache files",
+        self.card_junk = StatCard("Junk Candidates", "—”", "temp / cache files",
                                   "trash", "red")
-        self.card_name_dupes = StatCard("Name Collisions", "â€”",
+        self.card_name_dupes = StatCard("Name Collisions", "—”",
                                         "same name, diff folder", "copy", "amber")
-        self.card_deep = StatCard("Deep Files", "â€”", "nested beyond threshold",
+        self.card_deep = StatCard("Deep Files", "—”", "nested beyond threshold",
                                   "layers", "violet")
-        self.card_long = StatCard("Long Paths", "â€”", "beyond safe limits",
+        self.card_long = StatCard("Long Paths", "—”", "beyond safe limits",
                                   "alert-circle", "amber")
-        self.card_non_ascii = StatCard("Non-ASCII Names", "â€”",
+        self.card_non_ascii = StatCard("Non-ASCII Names", "—”",
                                        "may break tooling", "code", "cyan")
-        self.card_children = StatCard("Busiest Folders", "â€”",
+        self.card_children = StatCard("Busiest Folders", "—”",
                                       "files per directory", "folder", "blue")
         self._cards = (self.card_junk, self.card_name_dupes, self.card_deep,
                        self.card_long, self.card_non_ascii, self.card_children)
@@ -823,7 +827,7 @@ class AdvancedPage(Page):
         self.dup_badge = p1.set_badge("0")
         self.dup_table = make_table(
             ["Filename", "Copies", "Total Size", "Example Path"])
-        p1.add(FilterBar(self.dup_table, "Filter colliding namesâ€¦"))
+        p1.add(FilterBar(self.dup_table, "Filter colliding names—¦"))
         p1.add(self.dup_table, 1)
         _wire_open_in_viewer(self.dup_table, self._open_in_viewer)
         root.addWidget(p1)
@@ -833,7 +837,7 @@ class AdvancedPage(Page):
         self.junk_badge = p2.set_badge("0")
         self.junk_table = make_table(
             ["Name", "Location", "Type", "Size", "Age (days)"])
-        p2.add(FilterBar(self.junk_table, "Filter junk filesâ€¦"))
+        p2.add(FilterBar(self.junk_table, "Filter junk files—¦"))
         p2.add(self.junk_table, 1)
         _wire_open_in_viewer(self.junk_table, self._open_in_viewer)
         root.addWidget(p2)
@@ -845,7 +849,7 @@ class AdvancedPage(Page):
                         "Beyond the configured depth threshold")
         self.deep_badge = p3.set_badge("0")
         self.deep_table = make_table(["Name", "Location", "Depth", "Size"])
-        p3.add(FilterBar(self.deep_table, "Filter nested filesâ€¦"))
+        p3.add(FilterBar(self.deep_table, "Filter nested files—¦"))
         p3.add(self.deep_table, 1)
         _wire_open_in_viewer(self.deep_table, self._open_in_viewer)
         two.addWidget(p3)
@@ -854,7 +858,7 @@ class AdvancedPage(Page):
                         "Paths exceeding safe limits")
         self.long_badge = p4.set_badge("0")
         self.long_table = make_table(["Name", "Path Length", "Location"])
-        p4.add(FilterBar(self.long_table, "Filter long pathsâ€¦"))
+        p4.add(FilterBar(self.long_table, "Filter long paths—¦"))
         p4.add(self.long_table, 1)
         two.addWidget(p4)
         root.addLayout(two)
@@ -872,7 +876,7 @@ class AdvancedPage(Page):
                         "Scripts, configs or unknown binaries")
         self.extless_badge = p6.set_badge("0")
         self.extless_table = make_table(["Name", "Location", "Size"])
-        p6.add(FilterBar(self.extless_table, "Filter extension-less filesâ€¦"))
+        p6.add(FilterBar(self.extless_table, "Filter extension-less files—¦"))
         p6.add(self.extless_table, 1)
         _wire_open_in_viewer(self.extless_table, self._open_in_viewer)
         two2.addWidget(p6)
@@ -883,7 +887,7 @@ class AdvancedPage(Page):
         self.children_badge = p7.set_badge("0")
         self.children_table = make_table(
             ["Directory", "Direct Files", "Size"])
-        p7.add(FilterBar(self.children_table, "Filter directoriesâ€¦"))
+        p7.add(FilterBar(self.children_table, "Filter directories—¦"))
         p7.add(self.children_table, 1)
         root.addWidget(p7)
 
@@ -897,7 +901,7 @@ class AdvancedPage(Page):
 
     def set_empty(self) -> None:
         for card in self._cards:
-            card.set_value("â€”", animate=False)
+            card.set_value("—”", animate=False)
         for table in (self.dup_table, self.junk_table, self.deep_table,
                       self.long_table, self.mime_table, self.extless_table,
                       self.children_table):
@@ -1037,7 +1041,7 @@ class InsightsPage(Page):
                 "Nothing to report yet",
                 "Run a scan to generate recommendations and insights.",
                 "insights"))
-        self.tree_view.setText("â€”")
+        self.tree_view.setText("—”")
         self.warnings.setText("")
 
     def set_result(self, result: AnalysisResult) -> None:
@@ -1066,7 +1070,7 @@ class InsightsPage(Page):
             self.ins_box.addWidget(InsightCard(
                 "info", "check-circle", str(ins).replace("**", "")))
 
-        self.tree_view.setText(result.tree_text or "â€”")
+        self.tree_view.setText(result.tree_text or "—”")
         self.warnings.setText(
             "  âš   " + "  Â·  ".join(result.warnings) if result.warnings else "")
 
@@ -1145,7 +1149,7 @@ class ReportsPage(Page):
         self.dir_edit = QLineEdit()
         self.dir_edit.setPlaceholderText(
             "Defaults to 'folder_analysis' inside the scanned folder")
-        browse = QPushButton("Browseâ€¦")
+        browse = QPushButton("Browse—¦")
         browse.setObjectName("GhostButton")
         browse.setIcon(get_svg_icon("folder", color="#cbd5e1", size=16))
         browse.clicked.connect(self._browse)
@@ -1198,7 +1202,7 @@ class ReportsPage(Page):
         self.export_badge.setText(f"{result.total_files:,} files")
         self.export_btn.setEnabled(True)
         self.status.setText(
-            f"Ready to export â€” {result.total_files:,} files indexed "
+            f"Ready to export —” {result.total_files:,} files indexed "
             f"({result.total_storage_formatted}).")
         if not self.dir_edit.text().strip():
             self.dir_edit.setPlaceholderText(
@@ -1208,7 +1212,7 @@ class ReportsPage(Page):
         """Reflect an in-flight export on the button."""
         has_data = self.result is not None and self.result.has_data
         self.export_btn.setEnabled(not busy and has_data)
-        self.export_btn.setText("  Exportingâ€¦" if busy else "  Export Reports")
+        self.export_btn.setText("  Exporting—¦" if busy else "  Export Reports")
 
     def report_done(self, written: List[str], output_dir: str) -> None:
         """Record a successful export for display and later reopening."""
@@ -1216,7 +1220,7 @@ class ReportsPage(Page):
         self.open_btn.setVisible(True)
         self.export_badge.setText(f"{len(written)} files")
         lines = [f"Exported {len(written)} report(s) to:"]
-        lines += [f"  â€¢  {os.path.basename(p)}" for p in written]
+        lines += [f"  —¢  {os.path.basename(p)}" for p in written]
         self.status.setText("<br>".join(lines))
 
     def report_failed(self, message: str) -> None:
@@ -1420,7 +1424,7 @@ class SettingsPage(Page):
 
     def _build_about(self) -> GlassPanel:
         panel = GlassPanel("About", "info",
-                           "Folder Analysis Pro â€” storage analytics")
+                           "Folder Analysis Pro —” storage analytics")
         info = QLabel(
             f"<b>Version {__version__}</b><br/>"
             "Pure-Python analysis engine with a PySide6 front end. Duplicate "

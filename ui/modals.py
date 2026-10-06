@@ -191,7 +191,7 @@ class StageRow(QFrame):
         col.setSpacing(1)
         self.label = QLabel(label)
         self.label.setObjectName("StageLabel")
-        self.detail = QLabel("waitingâ€¦")
+        self.detail = QLabel("waiting—¦")
         self.detail.setObjectName("StageDetail")
         self.detail.setTextInteractionFlags(
             Qt.TextInteractionFlag.TextSelectableByMouse)
@@ -289,7 +289,7 @@ class ExportOverlay(OverlayHost):
         progress_row.addWidget(self._pct)
         lay.addLayout(progress_row)
 
-        self._status = QLabel("Preparingâ€¦")
+        self._status = QLabel("Preparing—¦")
         self._status.setObjectName("ModalMeta")
         self._status.setWordWrap(True)
         lay.addWidget(self._status)
@@ -311,7 +311,7 @@ class ExportOverlay(OverlayHost):
 
     # -- progress ----------------------------------------------------------
 
-    def start_stage(self, index: int, note: str = "writingâ€¦") -> None:
+    def start_stage(self, index: int, note: str = "writing—¦") -> None:
         """Mark stage ``index`` running; earlier stages settle as done."""
         for i, stage in enumerate(self._stages):
             if i < index:
@@ -362,7 +362,7 @@ class ExportOverlay(OverlayHost):
         lay: QVBoxLayout = h["body"]
 
         listing = QLabel("<br>".join(
-            f"â€¢  <b>{os.path.basename(p)}</b>" for p in written)
+            f"—¢  <b>{os.path.basename(p)}</b>" for p in written)
             or "No files were written.")
         listing.setObjectName("ModalBody")
         listing.setTextInteractionFlags(
@@ -427,7 +427,7 @@ class ShortcutsOverlay(OverlayHost):
 
     SECTIONS = [
         ("Navigation", [
-            ("Ctrl + 1â€¦9", "Jump straight to a page"),
+            ("Ctrl + 1—¦9", "Jump straight to a page"),
             ("Ctrl + O", "Choose a folder to analyze"),
             ("?", "Show this shortcut sheet"),
             ("Esc", "Cancel a running scan / close an overlay"),

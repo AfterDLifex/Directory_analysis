@@ -73,12 +73,25 @@ class MainWindow(QWidget):
     #: Emitted whenever the active page changes (page key, not index).
     pageChanged = Signal(str)
 
+    #: Minimum acceptable size so the sidebar and status bar never cramp.
+    MIN_SIZE = QSize(1120, 720)
+    #: Default desktop-ready size (4:3 aspect, comfortably scrollable).
+    DEFAULT_SIZE = QSize(1400, 900)
+    #: Minimum size that still shows the sidebar and status bar without
+    #: overlapping content.
+    LAYOUT_SAFE_MIN_SIZE = QSize(1200, 760)
+
     def __init__(self, theme: Optional[str] = None) -> None:
         super().__init__()
         self.setWindowTitle(f"Folder Analysis Pro v{__version__}")
         self.setObjectName("RootContainer")
-        self.resize(1400, 900)
-        self.setMinimumSize(1120, 720)
+
+        # --- size policy ---------------------------------------------------
+        # Enforce a single, layout-safe minimum so the sidebar never overlaps
+        # pages and the window cannot be shrunk into an unusable shape.
+        self.setMinimumSize(self.LAYOUT_SAFE_MIN_SIZE)
+        self.resize(self.DEFAULT_SIZE)
+        self._resize_count = 0
 
         self._thread: Optional[QThread] = None
         self._worker: Optional[ScanWorker] = None

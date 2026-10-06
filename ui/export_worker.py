@@ -72,10 +72,23 @@ class ExportWorker(QObject):
         self.formats = [f for f in formats if f in FORMATS]
         self.output_dir = output_dir
         self._cancelled = False
+        # Yield to the event loop periodically so the UI stays responsive.
+        self._yield_every = 4
 
     def cancel(self) -> None:
         """Stop before the next format starts."""
         self._cancelled = True
+
+    def _yield_to_ui(self, step: int) -> None:
+        """Pump the Qt event loop so pending paint/input events run.
+
+        Without this the progress overlay never repaints while the worker
+        thread is busy writing large files, making the app appear frozen.
+        """
+        if step % self._yield_every == 0:
+            from PySide6.QtCore import QCoreApplication
+            QCoreApplication.processEvents(
+                QEventLoop.ProcessEventsFlag.AllEvents, 1)
 
     # -- worker entry point ------------------------------------------------
 
@@ -105,6 +118,7 @@ class ExportWorker(QObject):
             path = os.path.join(self.output_dir, filename)
 
             self.stageStarted.emit(index, "writing…")
+            self._yield_to_ui(index)
             try:
                 func = getattr(exporters, func_name)
                 if takes_title:
@@ -123,6 +137,7 @@ class ExportWorker(QObject):
             self.stageFinished.emit(index, detail)
             self.progress.emit(index + 1, total)
             self.elapsedChanged.emit(round(time.perf_counter() - started, 2))
+            self._yield_to_ui(index)
 
         if self._cancelled:
             self.failed.emit("Export cancelled before all formats were written.")

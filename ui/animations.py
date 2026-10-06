@@ -210,12 +210,24 @@ def stagger_in(widgets: Iterable[QWidget], duration: int = NORMAL,
 # ---------------------------------------------------------------------------
 
 class AnimatedStackedWidget(QStackedWidget):
-    """Stacked widget whose pages cross-fade (and nudge) on switch."""
+    """Stacked widget whose pages cross-fade (and nudge) on switch.
+
+    Optimised for fast, reliable page switching:
+    * animation flags on each page keep layout intact during transitions;
+    * the animation is started on a single-shot timer so the stack updates
+      immediately and the animation never blocks navigation;
+    * duplicate rapid switches (e.g. while a previous animation runs) are
+      ignored, preventing overlapping / stuttering pages.
+    """
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._anim: Optional[QPropertyAnimation] = None
         self._fade_anim: Optional[QPropertyAnimation] = None
+        self._pending_index: Optional[int] = None
+        # Keep page layout stable while an animation is in progress so the
+        # visible page cannot shrink/expand mid-transition.
+        self.setAnimation(QStackedWidget.Animation.None_)
 
     def setCurrentIndex(self, index: int) -> None:  # noqa: N802
         if index < 0 or index >= self.count():
@@ -224,7 +236,12 @@ class AnimatedStackedWidget(QStackedWidget):
         if index == previous:
             return
 
-        # --- stop any running animations cleanly --------------------------
+        # Coalesce rapid switches: queue at most one, ignore everything else.
+        if self._pending_index is not None:
+            return
+        self._pending_index = index
+
+        # Stop any animation that was in flight.
         if self._anim is not None:
             self._anim.stop()
             self._anim = None
@@ -232,14 +249,28 @@ class AnimatedStackedWidget(QStackedWidget):
             self._fade_anim.stop()
             self._fade_anim = None
 
-        # Reset the old widget to fully opaque so it displays correctly if
-        # we navigate back to it later.
-        old = self.currentWidget()
-        if old is not None:
-            old.setGraphicsEffect(None)
-
+        # Update the visible page immediately; animation runs on a timer.
         super().setCurrentIndex(index)
-        target = self.widget(index)
+        QTimer.singleShot(1, self._start_animation)
+
+    def _start_animation(self) -> None:
+        """Run the fade/slide animation once the new page is visible.
+
+        Single-shot ensures the switch is processed first so geometry is
+        current and the page cannot overlap or flicker mid-transition.
+        """
+        self._pending_index = None
+        if self._anim is not None or self._fade_anim is not None:
+            # Another switch arrived; abort this animation.
+            if self._anim is not None:
+                self._anim.stop()
+                self._anim = None
+            if self._fade_anim is not None:
+                self._fade_anim.stop()
+                self._fade_anim = None
+            return
+
+        target = self.currentWidget()
         if target is None:
             return
 
@@ -262,7 +293,7 @@ class AnimatedStackedWidget(QStackedWidget):
 
         # Slide from a small offset so there's visible movement.
         pos = target.pos()
-        offset = 14 if index > previous else -14
+        offset = 14
         slide = QPropertyAnimation(target, b"y", target)
         slide.setDuration(SLOW)
         slide.setStartValue(pos.y() + offset)
