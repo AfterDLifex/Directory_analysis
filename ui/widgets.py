@@ -58,9 +58,6 @@ def _subscribe(widget: QWidget, slot: Callable[[ThemeTokens], None]) -> None:
             # Widget was destroyed between queueing and running.
             try:
                 if widget is None or widget.parent() is None:
-                    # ``parent() is None`` means the widget has been
-                    # unparented (usually on the way to being deleted);
-                    # disconnecting here keeps the subscriber list small.
                     try:
                         manager.themeChanged.disconnect(_on_change)
                     except (RuntimeError, TypeError):
@@ -109,7 +106,16 @@ class Pill(QLabel):
 
 
 class IconLabel(QLabel):
-    """A pixmap label that re-colours itself on theme change."""
+    """A pixmap label that re-colours itself on theme change.
+
+    Visibility-aware: rendering an SVG to a pixmap costs ~3-6 ms because
+    ``QSvgRenderer`` parses the XML and rasterises it through ``QPainter``,
+    and the pixmap cache always misses on a colour change. With 80-150
+    icons on the widget tree, a naive refresh on theme change was the
+    single largest cost of the switch (0.5-1 s). Hidden pages do not need
+    to pay it: they only need to know they owe a refresh, which they do on
+    their next ``showEvent``.
+    """
 
     def __init__(self, icon_name: str, size: int = 18,
                  color_role: str = "accent",
@@ -118,6 +124,7 @@ class IconLabel(QLabel):
         self._icon_name = icon_name
         self._size = size
         self._role = color_role
+        self._dirty = False
         self.setFixedSize(size + 8, size + 8)
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.refresh()
@@ -127,10 +134,25 @@ class IconLabel(QLabel):
         self.refresh()
 
     def refresh(self) -> None:
+        """Re-render the icon; skip the work while the label is hidden.
+
+        ``isVisible()`` accounts for the whole ancestor chain, so an icon
+        inside a hidden page reports hidden. The pending flag is consumed
+        by :meth:`showEvent` when the page is next shown.
+        """
+        if not self.isVisible():
+            self._dirty = True
+            return
+        self._dirty = False
         t = tokens()
         self.setPixmap(get_svg_pixmap(
             self._icon_name, size=self._size,
             color=getattr(t, self._role, t.accent)))
+
+    def showEvent(self, event) -> None:  # noqa: N802
+        super().showEvent(event)
+        if self._dirty:
+            self.refresh()
 
 
 class SectionHeader(QWidget):
@@ -266,6 +288,8 @@ class StatCard(QFrame):
 
     def _on_theme(self, t: ThemeTokens) -> None:
         color = getattr(t, self._accent_role, t.accent)
+        # IconLabel.refresh() is a no-op work-wise when hidden; only the
+        # inline stylesheet below is cheap enough to always set.
         self.icon.refresh()
         self.icon.setStyleSheet(f"background: {color}22; border-radius: 9px;")
 
@@ -356,10 +380,24 @@ class EmptyState(QWidget):
 def tool_button(icon_name: str, tooltip: str, on_click: Callable[[], None],
                 checkable: bool = False, role: str = "text_dim",
                 size: int = 32) -> QPushButton:
-    """Compact icon-only button that follows the theme colours."""
+    """Compact icon-only button that follows the theme colours.
+
+    Uses the same visibility-aware refresh as :class:`IconLabel` so icons
+    inside hidden overlays or off-screen top-levels do not incur an SVG
+    re-render on every theme change.
+    """
     from PySide6.QtCore import QSize
 
-    btn = QPushButton()
+    class _ToolButton(QPushButton):
+        _dirty_icon = False
+
+        def showEvent(self, event) -> None:  # noqa: N802
+            super().showEvent(event)
+            if self._dirty_icon:
+                self._dirty_icon = False
+                apply_icon(ThemeManager.current())
+
+    btn = _ToolButton()
     btn.setObjectName("IconButton")
     btn.setCheckable(checkable)
     btn.setToolTip(tooltip)
@@ -368,12 +406,15 @@ def tool_button(icon_name: str, tooltip: str, on_click: Callable[[], None],
     btn.setIconSize(QSize(size - 16, size - 16))
     btn.clicked.connect(on_click)
 
-    def _apply(t: ThemeTokens) -> None:
+    def apply_icon(t: ThemeTokens) -> None:
+        if not btn.isVisible():
+            btn._dirty_icon = True
+            return
         btn.setIcon(get_svg_icon(
             icon_name, color=getattr(t, role, t.text_dim),
             active_color=t.text_strong, size=size - 16))
 
-    _subscribe(btn, _apply)
+    _subscribe(btn, apply_icon)
     return btn
 
 

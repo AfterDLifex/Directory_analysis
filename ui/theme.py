@@ -841,6 +841,9 @@ class ThemeManager(QObject):
         self._apply_timer: Optional[QTimer] = None
         self._pending_tokens: Optional[ThemeTokens] = None
         self._flush_timer: Optional[QTimer] = None
+        # Track the last (theme, accent) pair that was actually pushed, so a
+        # redundant _do_apply() (e.g. from a later show()) is a no-op.
+        self._applied_key: Optional[str] = None
 
     # -- construction ------------------------------------------------------
 
@@ -928,8 +931,7 @@ class ThemeManager(QObject):
         self._tokens = tokens.with_accent(accent)
         # Apply synchronously at startup: the first stylesheet push is
         # dominated by initial layout, not by the switch itself.
-        self._apply()
-        self._schedule_fanout(immediate=True)
+        self._do_apply()
 
     def _schedule_apply(self) -> None:
         """Coalesce a burst of theme/accent clicks into one apply pass."""
@@ -943,15 +945,20 @@ class ThemeManager(QObject):
 
     def _do_apply(self) -> None:
         self._apply_timer = None
+        # Idempotency: if the (theme, accent) pair is already live, there is
+        # nothing to re-push. This matters because ``MainWindow.show`` calls
+        # us defensively before the first frame, and a startup path that
+        # already applied via ``load_preferences`` should not pay twice.
+        key = f"{self._tokens.key}:{self._tokens.accent}"
+        if key == self._applied_key:
+            return
+        self._applied_key = key
         self._apply()
         self._schedule_fanout()
 
-    def _schedule_fanout(self, immediate: bool = False) -> None:
+    def _schedule_fanout(self) -> None:
         """Emit :attr:`themeChanged` once, after the stylesheet has settled."""
         self._pending_tokens = self._tokens
-        if immediate:
-            self._flush_fanout()
-            return
         if self._flush_timer is not None:
             self._flush_timer.stop()
         else:
@@ -1047,8 +1054,19 @@ def _cached_stylesheet(t: ThemeTokens) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Chunked repolish (unchanged behaviour, still needed)
+# Chunked repolish (only touches widgets that actually carry a dynamic property)
 # ---------------------------------------------------------------------------
+
+# The QSS references exactly these dynamic properties:
+#   [accent="..."]   on QFrame#StatCard
+#   [trend="..."]    on QLabel#StatCardTrend
+#   [severity="..."] on #InsightCard
+#   [state="..."]    on #StatusDot, #Swatch, #ModalIcon, #StageRow
+#   [toastKind="..."] on #Toast
+# Checking five well-known names with QObject::property is dramatically
+# cheaper than allocating a QStringList from dynamicPropertyNames() on every
+# widget in the tree.
+_REPOLISH_PROPS = ("state", "accent", "trend", "severity", "toastKind")
 
 _REPOLISH_BATCH = 40
 _REPOLISH_TOKEN = [0]
@@ -1068,7 +1086,7 @@ def _schedule_repolish(app) -> None:
         try:
             if not w.isVisible():
                 continue
-            if not w.dynamicPropertyNames():
+            if not any(w.property(p) is not None for p in _REPOLISH_PROPS):
                 continue
         except RuntimeError:
             continue
@@ -1106,7 +1124,8 @@ def apply_theme(app, theme_key: Optional[str] = None) -> ThemeManager:
     manager = ThemeManager.instance(app)
     if theme_key:
         manager.set_theme(theme_key)
-        # First apply is synchronous by design (see load_preferences).
+        # First apply is synchronous by design so the window is themed
+        # before it is shown.
         manager._do_apply()
     else:
         manager.load_preferences()

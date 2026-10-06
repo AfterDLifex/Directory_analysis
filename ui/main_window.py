@@ -29,7 +29,7 @@ from PySide6.QtWidgets import (
 from folder_analyzer import __version__
 from folder_analyzer.models import AnalysisResult
 
-from .animations import AnimatedStackedWidget, stagger_in
+from .animations import AnimatedStackedWidget
 from .export_worker import ExportWorker, plan
 from .icons import get_svg_icon, get_svg_pixmap
 from .modals import (
@@ -40,8 +40,8 @@ from .pages import (
     InsightsPage, OverviewPage, ReportsPage, SettingsPage, TimelinePage,
 )
 from .scan_worker import ScanWorker
-from .settings_store import active_config, config_for_scan
-from .theme import ACCENTS, THEMES, ThemeManager, ThemeTokens
+from .settings_store import config_for_scan
+from .theme import ACCENTS, THEMES, ThemeManager
 from .toast import ToastHost
 from .widgets import tool_button
 
@@ -86,12 +86,10 @@ class MainWindow(QWidget):
         self.setWindowTitle(f"Folder Analysis Pro v{__version__}")
         self.setObjectName("RootContainer")
 
-        # --- size policy ---------------------------------------------------
-        # Enforce a single, layout-safe minimum so the sidebar never overlaps
-        # pages and the window cannot be shrunk into an unusable shape.
-        self.setMinimumSize(self.LAYOUT_SAFE_MIN_SIZE)
-        self.resize(self.DEFAULT_SIZE)
-
+        # --- runtime state ------------------------------------------------
+        # Everything the rest of the class reads is initialised *before*
+        # _build_ui() runs, because _build_ui() constructs widgets whose
+        # signals can, in principle, fire back into this instance.
         self._thread: Optional[QThread] = None
         self._worker: Optional[ScanWorker] = None
         self._result: Optional[AnalysisResult] = None
@@ -109,19 +107,40 @@ class MainWindow(QWidget):
         self._key_for_row: Dict[int, str] = {}
 
         # Chart pages to rebuild after a theme change, one per event-loop
-        # turn so the window never blocks on both rebuilds at once.
+        # turn so the window never blocks on both rebuilds at once. The
+        # ``_active`` flag makes the pump idempotent, so a second theme
+        # change landing mid-rebuild cannot spawn a second pump loop.
         self._chart_rebuild_queue: List[str] = []
+        self._chart_rebuild_active = False
 
         self.manager: Optional[ThemeManager] = None
+        # Guards the one-shot work done in the first ``show()`` call.
+        self._ready_to_show = False
 
-        self._build_ui()
-        self.manager = ThemeManager.instance()
-        self.manager.themeChanged.connect(self._on_theme_changed)
-        self._wire_overlays()
-        self._wire_viewer_callbacks()
-        self._install_shortcuts()
-        if theme:
-            self.manager.set_theme(theme)
+        # --- construction ------------------------------------------------
+        # Updates are disabled for the whole construction so Qt does not
+        # paint intermediate states (empty labels, unstyled panels, default
+        # sizes) before the widget tree is complete. This is what removes
+        # the initial flicker on slower startup paths such as a PyInstaller
+        # onefile launch, where the first frame may otherwise be drawn
+        # twice: once during construction and once when the theme lands.
+        self.setUpdatesEnabled(False)
+        try:
+            self._build_ui()
+            self.manager = ThemeManager.instance()
+            self.manager.themeChanged.connect(self._on_theme_changed)
+            self._wire_overlays()
+            self._wire_viewer_callbacks()
+            self._install_shortcuts()
+            if theme:
+                self.manager.set_theme(theme)
+        finally:
+            self.setUpdatesEnabled(True)
+
+        # Size is set *after* the widget tree exists so no early resize
+        # event races the theme application.
+        self.setMinimumSize(self.LAYOUT_SAFE_MIN_SIZE)
+        self.resize(self.DEFAULT_SIZE)
 
     # ------------------------------------------------------------------
     # Construction
@@ -249,10 +268,9 @@ class MainWindow(QWidget):
         lay.addWidget(help_btn)
         return bar
 
-
-# ----------------------------------------------------------------------
+    # ------------------------------------------------------------------
     # Sidebar with section headers
-    # ----------------------------------------------------------------------
+    # ------------------------------------------------------------------
 
     def _build_nav(self) -> QWidget:
         container = QWidget()
@@ -269,7 +287,6 @@ class MainWindow(QWidget):
         # Grouped nav: a non-selectable header row per section, then pages.
         self.nav = QListWidget()
         self.nav.setObjectName("NavList")
-        self.nav.setIconSize(self.nav.iconSize())
 
         row = 0
         current_section = None
@@ -371,12 +388,17 @@ class MainWindow(QWidget):
         sidebar selection highlight is painted by Qt *before* any potentially
         heavy page rendering runs on the main thread.  This eliminates the
         freeze/hang symptom when switching to data-heavy pages.
+
+        The timer is bound to ``self`` as its context object, so if the
+        window is closed before it fires Qt cancels the callback instead
+        of invoking it against a half-destroyed C++ object.
         """
         key = self._key_for_row.get(row)
         if key is None:
             return
         page_index = PAGE_KEYS.index(key)
-        QTimer.singleShot(0, lambda: self._switch_stack(page_index, key))
+        QTimer.singleShot(0, self,
+                          lambda: self._switch_stack(page_index, key))
 
     def _switch_stack(self, page_index: int, key: str) -> None:
         """Perform the actual stack switch and emit pageChanged."""
@@ -391,7 +413,8 @@ class MainWindow(QWidget):
         if self.nav.currentRow() == row:
             # Row unchanged → currentRowChanged won't fire, so switch manually.
             page_index = PAGE_KEYS.index(key)
-            QTimer.singleShot(0, lambda: self._switch_stack(page_index, key))
+            QTimer.singleShot(0, self,
+                              lambda: self._switch_stack(page_index, key))
         else:
             # Setting the row fires currentRowChanged → _on_nav_row handles the rest.
             self.nav.setCurrentRow(row)
@@ -400,10 +423,9 @@ class MainWindow(QWidget):
         if 0 <= index < len(PAGE_KEYS):
             self._goto(PAGE_KEYS[index])
 
-
-# ----------------------------------------------------------------------
+    # ------------------------------------------------------------------
     # Scanning
-    # ----------------------------------------------------------------------
+    # ------------------------------------------------------------------
 
     def _browse(self) -> None:
         start = self.path_edit.text().strip() or os.path.expanduser("~")
@@ -535,10 +557,9 @@ class MainWindow(QWidget):
             icon_name, size=15, color=colors.get(state, "#60a5fa")))
         self.status_label.setText(text)
 
-
-# ----------------------------------------------------------------------
+    # ------------------------------------------------------------------
     # Export (non-blocking: worker thread + live overlay)
-    # ----------------------------------------------------------------------
+    # ------------------------------------------------------------------
 
     def start_export(self, output_dir: str, formats: List[str]) -> None:
         """Start an export on a worker thread and show the progress overlay.
@@ -633,13 +654,20 @@ class MainWindow(QWidget):
             return
         self._toasts.show("No exported reports yet.", "info")
 
-
-# ----------------------------------------------------------------------
+    # ------------------------------------------------------------------
     # Overlays
-    # ----------------------------------------------------------------------
+    # ------------------------------------------------------------------
 
     def _wire_overlays(self) -> None:
-        """Create the overlays and connect their actions."""
+        """Create the overlays and connect their actions.
+
+        ``self.manager`` is set before this runs in ``__init__``; assert the
+        invariant rather than silently wiring signals to ``None.set_theme``.
+        """
+        if self.manager is None:
+            raise RuntimeError(
+                "_wire_overlays requires ThemeManager to be initialised first")
+
         self.export_overlay = ExportOverlay(self)
         self.export_overlay.openRequested.connect(
             self._on_open_folder_requested)
@@ -683,10 +711,9 @@ class MainWindow(QWidget):
         self.theme_overlay.show_picker(
             self.manager.tokens.key, self.manager.accent, THEMES, ACCENTS)
 
-
-# ----------------------------------------------------------------------
+    # ------------------------------------------------------------------
     # Shortcuts
-    # ----------------------------------------------------------------------
+    # ------------------------------------------------------------------
 
     def _install_shortcuts(self) -> None:
         def bind(seq: str, handler: Callable[[], None]) -> None:
@@ -760,37 +787,73 @@ class MainWindow(QWidget):
         the icon updates now, then one chart page rebuilds per event-loop
         turn. The window repaints the new stylesheet in between and stays
         responsive instead of freezing while both pages rebuild back-to-back.
+
+        The queue is deliberately append-only with a single active pump, so a
+        second theme change arriving mid-rebuild extends the existing queue
+        rather than spawning a second pump loop that races the first.
         """
         icon = "sun" if not tokens_obj.dark else "moon"
-        color = "#94a3b8" if tokens_obj.dark else "#b45309"
+        color = tokens_obj.text_dim
         self.theme_btn.setIcon(get_svg_icon(icon, color=color, size=16))
 
         if self._result is None or not self._result.has_data:
             for key in ("charts", "timeline"):
                 self._pages[key].set_empty()
             return
-        self._chart_rebuild_queue = ["charts", "timeline"]
-        QTimer.singleShot(16, self._rebuild_next_chart_page)
+
+        for key in ("charts", "timeline"):
+            if key not in self._chart_rebuild_queue:
+                self._chart_rebuild_queue.append(key)
+        if not self._chart_rebuild_active:
+            self._chart_rebuild_active = True
+            QTimer.singleShot(16, self, self._rebuild_next_chart_page)
 
     def _rebuild_next_chart_page(self) -> None:
         """Rebuild one queued chart page, then yield so the UI can paint."""
         if not self._chart_rebuild_queue or self._result is None:
+            self._chart_rebuild_active = False
+            self._chart_rebuild_queue.clear()
             return
         key = self._chart_rebuild_queue.pop(0)
         if self._result.has_data:
             self._pages[key].set_result(self._result)
         if self._chart_rebuild_queue:
-            QTimer.singleShot(16, self._rebuild_next_chart_page)
+            QTimer.singleShot(16, self, self._rebuild_next_chart_page)
+        else:
+            self._chart_rebuild_active = False
 
     # ------------------------------------------------------------------
     # Window events
     # ------------------------------------------------------------------
 
-    def resizeEvent(self, event) -> None:  # noqa: N802
-        super().resizeEvent(event)
-        toasts = getattr(self, "_toasts", None)
-        if toasts is not None:
-            toasts.on_parent_resize()
+    def show(self) -> None:  # noqa: D401
+        """Present the window, making sure the theme and size are settled.
+
+        On the first call we push the theme synchronously (a no-op if it was
+        already applied at startup) and pin the size. Doing this *before*
+        ``super().show()`` means the very first frame the user sees is
+        already fully themed, at the correct dimensions - which fixes the
+        brief "blink and resize" that was visible on PyInstaller launches.
+        """
+        if not self._ready_to_show:
+            self._ready_to_show = True
+            self._apply_theme_now()
+            self.resize(self.DEFAULT_SIZE)
+        super().show()
+
+    def _apply_theme_now(self) -> None:
+        """Push the current theme synchronously, if the manager supports it.
+
+        Prefers the public ``ensure_applied()`` accessor; falls back to the
+        private ``_do_apply()`` for compatibility with older ThemeManager
+        builds. Silently no-ops when neither is present.
+        """
+        if self.manager is None:
+            return
+        apply_now = getattr(self.manager, "ensure_applied", None) \
+            or getattr(self.manager, "_do_apply", None)
+        if apply_now is not None:
+            apply_now()
 
     def closeEvent(self, event) -> None:  # noqa: N802
         if self._worker is not None:
@@ -811,9 +874,8 @@ class MainWindow(QWidget):
         return [self._pages[key] for key in PAGE_KEYS]
 
     @property
-    def nav(self) -> QListWidget:
+    def nav(self) -> Optional[QListWidget]:
         """The sidebar navigation list (legacy accessor)."""
-        assert self._nav is not None
         return self._nav
 
     @nav.setter
