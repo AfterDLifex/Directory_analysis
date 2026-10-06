@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from typing import Callable, Optional
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QCheckBox, QFrame, QHBoxLayout, QLabel, QLineEdit, QPushButton,
     QSizePolicy, QVBoxLayout, QWidget,
@@ -29,15 +29,51 @@ def tokens() -> ThemeTokens:
 
 
 def _subscribe(widget: QWidget, slot: Callable[[ThemeTokens], None]) -> None:
-    """Call ``slot`` now and on every theme change, until ``widget`` dies."""
+    """Call ``slot`` now and on every theme change, until ``widget`` dies.
+
+    The change callback is *deferred to the next event-loop turn* rather
+    than run inside the signal emission. With dozens of subscribers
+    (every StatCard, IconLabel, tool_button, InsightCard, …) that used to
+    mean dozens of SVG renders + per-widget setStyleSheet calls executed
+    back-to-back on the GUI thread, inside ``themeChanged.emit`` - which
+    is exactly what made the theme switch look like a freeze.
+
+    Deferring spreads the per-widget work across event-loop turns, so the
+    window stays responsive (and repaints) throughout the fan-out.
+    """
     manager = ThemeManager.instance()
     slot(tokens())
 
-    def _on_change(t: ThemeTokens) -> None:
-        try:
-            slot(t)
-        except RuntimeError:      # widget already destroyed
-            manager.themeChanged.disconnect(_on_change)
+    state = {"pending": False}
+
+    def _on_change(_t: ThemeTokens) -> None:
+        # Per-widget debounce: if two theme changes fire back-to-back,
+        # only the latest survives and the slot runs once.
+        if state["pending"]:
+            return
+        state["pending"] = True
+
+        def _run() -> None:
+            state["pending"] = False
+            # Widget was destroyed between queueing and running.
+            try:
+                if widget is None or widget.parent() is None:
+                    # ``parent() is None`` means the widget has been
+                    # unparented (usually on the way to being deleted);
+                    # disconnecting here keeps the subscriber list small.
+                    try:
+                        manager.themeChanged.disconnect(_on_change)
+                    except (RuntimeError, TypeError):
+                        pass
+                    return
+                slot(manager.tokens)
+            except RuntimeError:
+                try:
+                    manager.themeChanged.disconnect(_on_change)
+                except (RuntimeError, TypeError):
+                    pass
+
+        QTimer.singleShot(0, _run)
 
     manager.themeChanged.connect(_on_change)
 

@@ -831,11 +831,14 @@ class ThemeManager(QObject):
         self._settings = QSettings("AfterDLifex", "FolderAnalysisPro")
         self._tokens: ThemeTokens = THEMES[DEFAULT_THEME]
         # --- theme-switch coalescing -------------------------------------
-        # A theme/accent click fires the full switch immediately, but the
-        # expensive ``themeChanged`` fan-out (chart rebuilds across hidden
-        # pages, widget repolish) is deferred to the event loop and merged,
-        # so two rapid clicks cannot stack two full rebuilds. That stacked
-        # rebuild is what made the window hang on a theme change.
+        # ``QApplication.setStyleSheet`` cannot be chunked - Qt reparses and
+        # re-evaluates the sheet against the whole widget tree in one
+        # blocking call. What we *can* do is:
+        #   * coalesce a burst of clicks into a single apply, and
+        #   * defer the apply to the next event-loop turn so the click
+        #     handler returns first and the button's own hover/press state
+        #     is painted before the freeze starts.
+        self._apply_timer: Optional[QTimer] = None
         self._pending_tokens: Optional[ThemeTokens] = None
         self._flush_timer: Optional[QTimer] = None
 
@@ -843,7 +846,6 @@ class ThemeManager(QObject):
 
     @classmethod
     def instance(cls, app=None) -> "ThemeManager":
-        """Return (creating if needed) the process-wide manager."""
         if cls._instance is None:
             if app is None:
                 from PySide6.QtWidgets import QApplication
@@ -855,7 +857,6 @@ class ThemeManager(QObject):
 
     @classmethod
     def current(cls) -> ThemeTokens:
-        """Active tokens without requiring a manager instance."""
         inst = cls._instance
         return inst.tokens if inst is not None else THEMES[DEFAULT_THEME]
 
@@ -883,7 +884,6 @@ class ThemeManager(QObject):
     # -- mutators ----------------------------------------------------------
 
     def set_theme(self, key: str) -> None:
-        """Switch theme by key (no-op when already active)."""
         if self._tokens is not None and self._tokens.key == key:
             return
         tokens = THEMES.get(key)
@@ -891,38 +891,30 @@ class ThemeManager(QObject):
             raise KeyError(f"Unknown theme: {key}")
         self._settings.setValue("theme", key)
         saved_accent = str(self._settings.value("accent", "") or "")
-        # A custom accent is kept, but only if the theme has not changed -
-        # otherwise the new theme's own default accent wins.
         self._tokens = tokens.with_accent(saved_accent or tokens.accent)
-        self._apply()
-        self._schedule_fanout()
+        self._schedule_apply()
 
     def toggle_theme(self) -> None:
-        """Jump between a dark and a light theme."""
         if self._tokens.dark:
             self.set_theme(next(k for k, v in THEMES.items() if not v.dark))
         else:
             self.set_theme(next(k for k, v in THEMES.items() if v.dark))
 
     def set_accent(self, hex_color: str) -> None:
-        """Override the brand accent without changing the theme."""
         if not hex_color:
             return
         if self._tokens.accent.lower() == hex_color.lower():
             return
         self._settings.setValue("accent", hex_color)
         self._tokens = self._tokens.with_accent(hex_color)
-        self._apply()
         self.accentChanged.emit(hex_color)
-        self._schedule_fanout()
+        self._schedule_apply()
 
     def set_density(self, name: str) -> None:
-        """Persist the preferred layout density."""
         self._settings.setValue("density", name)
         self.densityChanged.emit(name)
 
     def reset_appearance(self) -> None:
-        """Drop all appearance overrides and return to theme defaults."""
         self._settings.remove("accent")
         self._settings.remove("density")
         self.set_theme(DEFAULT_THEME)
@@ -930,24 +922,32 @@ class ThemeManager(QObject):
     # -- application -------------------------------------------------------
 
     def load_preferences(self) -> None:
-        """Apply persisted theme/accent/density at startup."""
         key = str(self._settings.value("theme", DEFAULT_THEME))
         tokens = THEMES.get(key, THEMES[DEFAULT_THEME])
         accent = str(self._settings.value("accent", "") or tokens.accent)
         self._tokens = tokens.with_accent(accent)
+        # Apply synchronously at startup: the first stylesheet push is
+        # dominated by initial layout, not by the switch itself.
         self._apply()
         self._schedule_fanout(immediate=True)
 
-    def _schedule_fanout(self, immediate: bool = False) -> None:
-        """Notify views, merging rapid-fire switches into one repaint pass.
+    def _schedule_apply(self) -> None:
+        """Coalesce a burst of theme/accent clicks into one apply pass."""
+        if self._apply_timer is not None:
+            # Already queued - it will pick up the latest self._tokens.
+            return
+        self._apply_timer = QTimer(self)
+        self._apply_timer.setSingleShot(True)
+        self._apply_timer.timeout.connect(self._do_apply)
+        self._apply_timer.start(0)
 
-        The stylesheet + palette are already live in :meth:`_apply` (fast),
-        but chart rebuilds and widget repolish are the expensive half of a
-        theme switch (~400ms with data). Deferring them to the event loop
-        lets the window repaint first so the switch *feels* instant, and
-        merging bursts (e.g. theme + accent picked in quick succession) skips
-        the redundant intermediate rebuilds that froze the app.
-        """
+    def _do_apply(self) -> None:
+        self._apply_timer = None
+        self._apply()
+        self._schedule_fanout()
+
+    def _schedule_fanout(self, immediate: bool = False) -> None:
+        """Emit :attr:`themeChanged` once, after the stylesheet has settled."""
         self._pending_tokens = self._tokens
         if immediate:
             self._flush_fanout()
@@ -958,10 +958,9 @@ class ThemeManager(QObject):
             self._flush_timer = QTimer(self)
             self._flush_timer.setSingleShot(True)
             self._flush_timer.timeout.connect(self._flush_fanout)
-        self._flush_timer.start(40)
+        self._flush_timer.start(0)
 
     def _flush_fanout(self) -> None:
-        """Emit one :attr:`themeChanged` for the latest pending tokens."""
         if self._pending_tokens is None:
             return
         tokens = self._pending_tokens
@@ -971,21 +970,84 @@ class ThemeManager(QObject):
         self.themeChanged.emit(tokens)
 
     def _apply(self) -> None:
-        # 1) Palette + stylesheet are a single app-wide push; Qt batches the
-        #    resulting update events internally, so this part stays fast even
-        #    with a large widget tree.
-        self._app.setPalette(self._tokens.as_palette())
-        self._app.setStyleSheet(build_stylesheet(self._tokens))
-        # 2) Re-polishing dynamic-property widgets ([state="..."], severity
-        #    chips, status dots, stage rows) is the expensive half. Defer it
-        #    to the event loop, chunked, so the repaint lands first and clicks
-        #    are processed between batches. A theme change now feels instant
-        #    even on a data-heavy page.
+        """Push the palette + stylesheet onto the app, in one blocking pass.
+
+        ``QApplication.setStyleSheet`` re-evaluates the sheet against the
+        entire widget tree, and Qt will happily repaint intermediate states
+        as each widget adopts the new rules. Both make the freeze look worse
+        than it is, so:
+
+        * repaints are suspended on every visible top-level window for the
+          duration of the push (single repaint at the end);
+        * a busy cursor is shown so the user knows something is happening;
+        * the stylesheet string is cached, so a switch back to a previously
+          used theme skips the formatting pass entirely.
+        """
+        windows = []
+        try:
+            for w in self._app.topLevelWindows():
+                try:
+                    if w.isVisible():
+                        w.setUpdatesEnabled(False)
+                        windows.append(w)
+                except RuntimeError:
+                    continue
+        except RuntimeError:
+            pass
+
+        busy = False
+        try:
+            from PySide6.QtGui import QGuiApplication
+            QGuiApplication.setOverrideCursor(Qt.CursorShape.BusyCursor)
+            busy = True
+        except Exception:
+            pass
+
+        try:
+            self._app.setPalette(self._tokens.as_palette())
+            self._app.setStyleSheet(_cached_stylesheet(self._tokens))
+        finally:
+            if busy:
+                try:
+                    from PySide6.QtGui import QGuiApplication
+                    QGuiApplication.restoreOverrideCursor()
+                except Exception:
+                    pass
+            for w in windows:
+                try:
+                    w.setUpdatesEnabled(True)
+                    w.update()
+                except RuntimeError:
+                    continue
+        # Dynamic-property widgets ([state="..."], severity chips, status
+        # dots) need an explicit repolish; do it chunked on the event loop
+        # so it never blocks a single frame.
         _schedule_repolish(self._app)
 
 
 # ---------------------------------------------------------------------------
-# Chunked repolish
+# Stylesheet cache
+# ---------------------------------------------------------------------------
+
+_STYLESHEET_CACHE: Dict[str, str] = {}
+
+
+def _cached_stylesheet(t: ThemeTokens) -> str:
+    """Return the rendered QSS for ``t``, memoised by (theme, accent)."""
+    key = f"{t.key}:{t.accent}"
+    sheet = _STYLESHEET_CACHE.get(key)
+    if sheet is None:
+        sheet = build_stylesheet(t)
+        # Keep the cache bounded; the working set is small (a couple of
+        # themes the user flips between) so a hard cap is fine.
+        if len(_STYLESHEET_CACHE) > 8:
+            _STYLESHEET_CACHE.clear()
+        _STYLESHEET_CACHE[key] = sheet
+    return sheet
+
+
+# ---------------------------------------------------------------------------
+# Chunked repolish (unchanged behaviour, still needed)
 # ---------------------------------------------------------------------------
 
 _REPOLISH_BATCH = 40
@@ -993,18 +1055,6 @@ _REPOLISH_TOKEN = [0]
 
 
 def _schedule_repolish(app) -> None:
-    """Queue a chunked, visibility-scoped repolish of dynamic-property widgets.
-
-    Only widgets that are (a) currently visible and (b) actually carry at
-    least one dynamic property are touched:
-
-    * invisible widgets pick up the new stylesheet when they next show
-      (Qt re-applies the app QSS on show), so skipping them is safe;
-    * widgets without dynamic properties are already handled by the plain
-      QSS cascade - repolishing them is pure waste.
-    """
-    # Bump the token so an in-flight repolish from a previous theme change
-    # is abandoned instead of fighting with this one.
     _REPOLISH_TOKEN[0] += 1
     token = _REPOLISH_TOKEN[0]
 
@@ -1031,7 +1081,7 @@ def _schedule_repolish(app) -> None:
 
 def _repolish_batch(widgets, start: int, token: int) -> None:
     if token != _REPOLISH_TOKEN[0]:
-        return                                     # superseded
+        return
     end = min(start + _REPOLISH_BATCH, len(widgets))
     for i in range(start, end):
         w = widgets[i]
@@ -1051,17 +1101,17 @@ def repolish_dynamic(app) -> None:
 
 
 def apply_theme(app, theme_key: Optional[str] = None) -> ThemeManager:
-    """Entry point used by ``main.py``: install the font, tokens and settings."""
     app.setStyle("Fusion")
     app.setFont(QFont("Segoe UI", 10))
     manager = ThemeManager.instance(app)
     if theme_key:
         manager.set_theme(theme_key)
+        # First apply is synchronous by design (see load_preferences).
+        manager._do_apply()
     else:
         manager.load_preferences()
     return manager
 
 
 def token_color(role: str, fallback: str = "#4f8cff") -> str:
-    """Resolve a semantic role name (``accent``/``success``/...) to hex."""
     return getattr(ThemeManager.current(), role, fallback)
