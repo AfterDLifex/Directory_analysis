@@ -18,7 +18,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from typing import Dict, List, Optional
 
-from PySide6.QtCore import QObject, QSettings, Qt, Signal
+from PySide6.QtCore import QObject, QSettings, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont, QPalette
 
 # ---------------------------------------------------------------------------
@@ -182,6 +182,8 @@ class ThemeTokens:
         for role in disabled:
             p.setColor(QPalette.ColorGroup.Disabled, role, QColor(self.text_faint))
         return p
+
+
 _DARK_SERIES = ("#4f8cff", "#8b5cf6", "#06b6d4", "#22c55e", "#f59e0b",
                 "#f43f5e", "#a855f7", "#14b8a6", "#eab308", "#64748b")
 _LIGHT_SERIES = ("#2563eb", "#7c3aed", "#0891b2", "#059669", "#d97706",
@@ -828,6 +830,14 @@ class ThemeManager(QObject):
         self._app = app
         self._settings = QSettings("AfterDLifex", "FolderAnalysisPro")
         self._tokens: ThemeTokens = THEMES[DEFAULT_THEME]
+        # --- theme-switch coalescing -------------------------------------
+        # A theme/accent click fires the full switch immediately, but the
+        # expensive ``themeChanged`` fan-out (chart rebuilds across hidden
+        # pages, widget repolish) is deferred to the event loop and merged,
+        # so two rapid clicks cannot stack two full rebuilds. That stacked
+        # rebuild is what made the window hang on a theme change.
+        self._pending_tokens: Optional[ThemeTokens] = None
+        self._flush_timer: Optional[QTimer] = None
 
     # -- construction ------------------------------------------------------
 
@@ -874,6 +884,8 @@ class ThemeManager(QObject):
 
     def set_theme(self, key: str) -> None:
         """Switch theme by key (no-op when already active)."""
+        if self._tokens is not None and self._tokens.key == key:
+            return
         tokens = THEMES.get(key)
         if tokens is None:
             raise KeyError(f"Unknown theme: {key}")
@@ -883,7 +895,7 @@ class ThemeManager(QObject):
         # otherwise the new theme's own default accent wins.
         self._tokens = tokens.with_accent(saved_accent or tokens.accent)
         self._apply()
-        self.themeChanged.emit(self._tokens)
+        self._schedule_fanout()
 
     def toggle_theme(self) -> None:
         """Jump between a dark and a light theme."""
@@ -896,11 +908,13 @@ class ThemeManager(QObject):
         """Override the brand accent without changing the theme."""
         if not hex_color:
             return
+        if self._tokens.accent.lower() == hex_color.lower():
+            return
         self._settings.setValue("accent", hex_color)
         self._tokens = self._tokens.with_accent(hex_color)
         self._apply()
         self.accentChanged.emit(hex_color)
-        self.themeChanged.emit(self._tokens)
+        self._schedule_fanout()
 
     def set_density(self, name: str) -> None:
         """Persist the preferred layout density."""
@@ -922,32 +936,118 @@ class ThemeManager(QObject):
         accent = str(self._settings.value("accent", "") or tokens.accent)
         self._tokens = tokens.with_accent(accent)
         self._apply()
-        self.themeChanged.emit(self._tokens)
+        self._schedule_fanout(immediate=True)
+
+    def _schedule_fanout(self, immediate: bool = False) -> None:
+        """Notify views, merging rapid-fire switches into one repaint pass.
+
+        The stylesheet + palette are already live in :meth:`_apply` (fast),
+        but chart rebuilds and widget repolish are the expensive half of a
+        theme switch (~400ms with data). Deferring them to the event loop
+        lets the window repaint first so the switch *feels* instant, and
+        merging bursts (e.g. theme + accent picked in quick succession) skips
+        the redundant intermediate rebuilds that froze the app.
+        """
+        self._pending_tokens = self._tokens
+        if immediate:
+            self._flush_fanout()
+            return
+        if self._flush_timer is not None:
+            self._flush_timer.stop()
+        else:
+            self._flush_timer = QTimer(self)
+            self._flush_timer.setSingleShot(True)
+            self._flush_timer.timeout.connect(self._flush_fanout)
+        self._flush_timer.start(40)
+
+    def _flush_fanout(self) -> None:
+        """Emit one :attr:`themeChanged` for the latest pending tokens."""
+        if self._pending_tokens is None:
+            return
+        tokens = self._pending_tokens
+        self._pending_tokens = None
+        if tokens is not self._tokens:
+            return
+        self.themeChanged.emit(tokens)
 
     def _apply(self) -> None:
+        # 1) Palette + stylesheet are a single app-wide push; Qt batches the
+        #    resulting update events internally, so this part stays fast even
+        #    with a large widget tree.
         self._app.setPalette(self._tokens.as_palette())
         self._app.setStyleSheet(build_stylesheet(self._tokens))
-        repolish_dynamic(self._app)
+        # 2) Re-polishing dynamic-property widgets ([state="..."], severity
+        #    chips, status dots, stage rows) is the expensive half. Defer it
+        #    to the event loop, chunked, so the repaint lands first and clicks
+        #    are processed between batches. A theme change now feels instant
+        #    even on a data-heavy page.
+        _schedule_repolish(self._app)
 
 
-def repolish_dynamic(app) -> None:
-    """Re-apply QSS to widgets using dynamic properties (``[state="..."]``).
+# ---------------------------------------------------------------------------
+# Chunked repolish
+# ---------------------------------------------------------------------------
 
-    Changing a Qt property does not restyle automatically; this walks the
-    widget tree once after a theme swap so accent-coloured chips, status dots
-    and stage rows update too.
+_REPOLISH_BATCH = 40
+_REPOLISH_TOKEN = [0]
+
+
+def _schedule_repolish(app) -> None:
+    """Queue a chunked, visibility-scoped repolish of dynamic-property widgets.
+
+    Only widgets that are (a) currently visible and (b) actually carry at
+    least one dynamic property are touched:
+
+    * invisible widgets pick up the new stylesheet when they next show
+      (Qt re-applies the app QSS on show), so skipping them is safe;
+    * widgets without dynamic properties are already handled by the plain
+      QSS cascade - repolishing them is pure waste.
     """
+    # Bump the token so an in-flight repolish from a previous theme change
+    # is abandoned instead of fighting with this one.
+    _REPOLISH_TOKEN[0] += 1
+    token = _REPOLISH_TOKEN[0]
+
     try:
-        widgets = app.allWidgets()
+        candidates = app.allWidgets()
     except RuntimeError:
         return
-    for w in widgets:
+
+    targets = []
+    for w in candidates:
+        try:
+            if not w.isVisible():
+                continue
+            if not w.dynamicPropertyNames():
+                continue
+        except RuntimeError:
+            continue
+        targets.append(w)
+
+    if not targets:
+        return
+    _repolish_batch(targets, 0, token)
+
+
+def _repolish_batch(widgets, start: int, token: int) -> None:
+    if token != _REPOLISH_TOKEN[0]:
+        return                                     # superseded
+    end = min(start + _REPOLISH_BATCH, len(widgets))
+    for i in range(start, end):
+        w = widgets[i]
         try:
             w.style().unpolish(w)
             w.style().polish(w)
+            w.update()
         except RuntimeError:
             continue
-        w.update()
+    if end < len(widgets):
+        QTimer.singleShot(0, lambda: _repolish_batch(widgets, end, token))
+
+
+def repolish_dynamic(app) -> None:
+    """Kept for backwards compatibility - now schedules a chunked pass."""
+    _schedule_repolish(app)
 
 
 def apply_theme(app, theme_key: Optional[str] = None) -> ThemeManager:

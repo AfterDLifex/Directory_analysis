@@ -210,103 +210,124 @@ def stagger_in(widgets: Iterable[QWidget], duration: int = NORMAL,
 # ---------------------------------------------------------------------------
 
 class AnimatedStackedWidget(QStackedWidget):
-    """Stacked widget whose pages cross-fade (and nudge) on switch.
+    """Stacked widget whose pages fade in cleanly on switch.
 
-    Optimised for fast, reliable page switching:
-    * animation flags on each page keep layout intact during transitions;
-    * the animation is started on a single-shot timer so the stack updates
-      immediately and the animation never blocks navigation;
-    * duplicate rapid switches (e.g. while a previous animation runs) are
-      ignored, preventing overlapping / stuttering pages.
+    Why opacity-only:
+
+    * The old implementation slid the incoming page on ``y`` while fading
+      it. Pages carry ``#PageRoot { background: transparent; }`` in QSS and
+      ``QStackedWidget`` does not clip children to its own rect, so the
+      slide dragged the page outside its normal bounds and exposed whatever
+      was underneath - the top bar, the status bar and the outgoing page -
+      producing the visible overlap the user reported.
+    * The old version also started a *second* fade while an existing one
+      was still running on the same widget, leaving stale
+      ``QGraphicsOpacityEffect`` instances behind. Rapid clicks then
+      flickered because two animations wrote to the same effect.
+
+    The rewrite:
+
+    * fades the incoming page from fully transparent to opaque;
+    * keeps at most one animation alive, coalescing rapid switches so the
+      latest requested index wins and intermediate ones are dropped;
+    * tears the ``QGraphicsOpacityEffect`` down as soon as the fade ends -
+      the effect forces off-screen rendering of the whole page, which is
+      measurably slower for table-heavy pages;
+    * clears any lingering effect on the outgoing page before hiding it,
+      so no half-faded page ever becomes visible again.
     """
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self._anim: Optional[QPropertyAnimation] = None
         self._fade_anim: Optional[QPropertyAnimation] = None
+        self._fade_effect: Optional[QGraphicsOpacityEffect] = None
+        self._fade_target: Optional[QWidget] = None
         self._pending_index: Optional[int] = None
-        self._previous_index: int = 0
 
     def setCurrentIndex(self, index: int) -> None:  # noqa: N802
         if index < 0 or index >= self.count():
             return
-        previous = self.currentIndex()
-        if index == previous:
+        if index == self.currentIndex() and self._pending_index is None:
             return
-
-        # Coalesce rapid switches: queue at most one, ignore everything else.
-        if self._pending_index is not None:
-            return
-        self._pending_index = index
-        self._previous_index = previous
-
-        # Stop any animation that was in flight.
-        if self._anim is not None:
-            self._anim.stop()
-            self._anim = None
+        # Coalesce: while a fade is running, remember only the latest target.
         if self._fade_anim is not None:
-            self._fade_anim.stop()
-            self._fade_anim = None
-
-        # Restore the outgoing page to fully opaque so navigating back to it
-        # later never shows a half-faded (overlapping) page.
-        old = self.currentWidget()
-        if old is not None:
-            old.setGraphicsEffect(None)
-
-        # Update the visible page immediately; animation runs on a timer.
-        super().setCurrentIndex(index)
-        QTimer.singleShot(1, self._start_animation)
-
-    def _start_animation(self) -> None:
-        """Run the fade/slide animation once the new page is visible.
-
-        Single-shot ensures the switch is processed first so geometry is
-        current and the page cannot overlap or flicker mid-transition.
-        """
-        self._pending_index = None
-        if self._anim is not None or self._fade_anim is not None:
-            # Another switch arrived; abort this animation.
-            if self._anim is not None:
-                self._anim.stop()
-                self._anim = None
-            if self._fade_anim is not None:
-                self._fade_anim.stop()
-                self._fade_anim = None
+            self._pending_index = index
             return
+        self._switch(index)
 
+    # -- internals ---------------------------------------------------------
+
+    def _switch(self, index: int) -> None:
+        self._clear_fade()
+
+        previous = self.currentWidget()
+        super().setCurrentIndex(index)
         target = self.currentWidget()
         if target is None:
             return
+
+        # Belt and braces: the stack has hidden ``previous``; make sure no
+        # leftover effect keeps it rendered as a ghost.
+        if previous is not None and previous is not target:
+            try:
+                previous.setGraphicsEffect(None)
+            except RuntimeError:
+                pass
 
         if reduced_motion():
             target.setGraphicsEffect(None)
             return
 
-        # Always start from opacity 0 so the fade is visible on every nav.
         effect = QGraphicsOpacityEffect(target)
         effect.setOpacity(0.0)
         target.setGraphicsEffect(effect)
 
-        fade = QPropertyAnimation(effect, b"opacity", target)
-        fade.setDuration(NORMAL)
-        fade.setStartValue(0.0)
-        fade.setEndValue(1.0)
-        fade.setEasingCurve(_ease_out())
-        fade.start()
-        self._fade_anim = fade
+        anim = QPropertyAnimation(effect, b"opacity", target)
+        anim.setDuration(NORMAL)
+        anim.setStartValue(0.0)
+        anim.setEndValue(1.0)
+        anim.setEasingCurve(_ease_out())
+        anim.finished.connect(self._on_fade_finished)
+        anim.start()
 
-        # Slide from a small offset so there's visible movement; direction
-        # follows whether we navigated forwards or backwards.
-        pos = target.pos()
-        offset = 14 if self.currentIndex() > self._previous_index else -14
-        slide = QPropertyAnimation(target, b"y", target)
-        slide.setDuration(SLOW)
-        slide.setStartValue(pos.y() + offset)
-        slide.setEndValue(pos.y())
-        slide.setEasingCurve(_ease_out())
-        slide.start()
-        self._anim = slide
+        self._fade_anim = anim
+        self._fade_effect = effect
+        self._fade_target = target
+
+    def _on_fade_finished(self) -> None:
+        target, effect = self._fade_target, self._fade_effect
+        self._fade_anim = None
+        self._fade_effect = None
+        self._fade_target = None
+
+        # Drop the effect so the page paints straight to the screen.
+        if target is not None and effect is not None:
+            try:
+                if target.graphicsEffect() is effect:
+                    target.setGraphicsEffect(None)
+            except RuntimeError:
+                pass
+
+        pending = self._pending_index
+        self._pending_index = None
+        if pending is not None and pending != self.currentIndex():
+            self._switch(pending)
+
+    def _clear_fade(self) -> None:
+        if self._fade_anim is not None:
+            try:
+                self._fade_anim.stop()
+            except RuntimeError:
+                pass
+            self._fade_anim = None
+        if self._fade_target is not None and self._fade_effect is not None:
+            try:
+                if self._fade_target.graphicsEffect() is self._fade_effect:
+                    self._fade_target.setGraphicsEffect(None)
+            except RuntimeError:
+                pass
+        self._fade_effect = None
+        self._fade_target = None
 
 
 def make_scroll(inner: QWidget) -> QScrollArea:

@@ -229,7 +229,21 @@ def _bars(entries: list[dict], value_key: str = "size", label_key: str = "name",
 
 
 class ChartView(QWidget):
-    """Themed chart container that rebuilds its chart on demand."""
+    """Themed chart container that (re)builds its chart on demand.
+
+    Chart construction is expensive (QtCharts keeps native resources alive
+    until the chart is replaced) and pages are frequently hidden. This view
+    therefore builds lazily:
+
+    * the first build is deferred to ``showEvent`` rather than construction;
+    * ``rebuild()`` on a hidden view only marks it dirty - the real work
+      happens on the next show, with the *current* theme colours already
+      in place.
+
+    Together with the deferred chart-page rebuild in the main window, this
+    keeps a theme switch responsive: only the chart page actually on screen
+    pays the rebuild cost, and that cost is bounded.
+    """
 
     def __init__(self, builder: Callable[[], Any],
                  min_height: int = 240,
@@ -242,21 +256,35 @@ class ChartView(QWidget):
         self._view = QChartView()
         self._view.setRenderHint(QPainter.RenderHint.Antialiasing)
         self._view.setMinimumHeight(min_height)
+        self._view.setVisible(False)          # placeholder shown until built
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.addWidget(self._view)
 
-        self._empty = EmptyState("No data yet", "Run a scan to populate this chart.",
+        self._empty = EmptyState("No data yet",
+                                 "Run a scan to populate this chart.",
                                  "charts")
         lay.addWidget(self._empty)
-        self._refresh()
+        self._dirty = True
+
+    # -- lifecycle ---------------------------------------------------------
+
+    def showEvent(self, event) -> None:  # noqa: N802
+        super().showEvent(event)
+        if self._dirty:
+            self._refresh()
 
     def rebuild(self) -> None:
-        """Re-create the chart so it picks up current theme colours."""
-        self._refresh()
+        """Request a rebuild: run now if visible, else on next show."""
+        self._dirty = True
+        if self.isVisible():
+            self._refresh()
+
+    # -- internals ---------------------------------------------------------
 
     def _refresh(self) -> None:
+        self._dirty = False
         chart = None
         try:
             chart = self._builder()

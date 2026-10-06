@@ -108,6 +108,10 @@ class MainWindow(QWidget):
         self._row_for_key: Dict[str, int] = {}
         self._key_for_row: Dict[int, str] = {}
 
+        # Chart pages to rebuild after a theme change, one per event-loop
+        # turn so the window never blocks on both rebuilds at once.
+        self._chart_rebuild_queue: List[str] = []
+
         self.manager: Optional[ThemeManager] = None
 
         self._build_ui()
@@ -751,14 +755,32 @@ class MainWindow(QWidget):
         """Re-render theme-dependent visuals after a theme/accent switch.
 
         QtCharts colours are drawn by the charts themselves, outside the reach
-        of QSS, so the chart pages are rebuilt from the stored result.
+        of QSS, so the chart pages must be rebuilt from the stored result.
+        That rebuild costs ~200ms per page (8 charts), so it is chunked:
+        the icon updates now, then one chart page rebuilds per event-loop
+        turn. The window repaints the new stylesheet in between and stays
+        responsive instead of freezing while both pages rebuild back-to-back.
         """
-        if self._result is not None and self._result.has_data:
-            for key in ("charts", "timeline"):
-                self._pages[key].set_result(self._result)
         icon = "sun" if not tokens_obj.dark else "moon"
         color = "#94a3b8" if tokens_obj.dark else "#b45309"
         self.theme_btn.setIcon(get_svg_icon(icon, color=color, size=16))
+
+        if self._result is None or not self._result.has_data:
+            for key in ("charts", "timeline"):
+                self._pages[key].set_empty()
+            return
+        self._chart_rebuild_queue = ["charts", "timeline"]
+        QTimer.singleShot(16, self._rebuild_next_chart_page)
+
+    def _rebuild_next_chart_page(self) -> None:
+        """Rebuild one queued chart page, then yield so the UI can paint."""
+        if not self._chart_rebuild_queue or self._result is None:
+            return
+        key = self._chart_rebuild_queue.pop(0)
+        if self._result.has_data:
+            self._pages[key].set_result(self._result)
+        if self._chart_rebuild_queue:
+            QTimer.singleShot(16, self._rebuild_next_chart_page)
 
     # ------------------------------------------------------------------
     # Window events
