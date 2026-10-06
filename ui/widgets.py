@@ -183,7 +183,7 @@ class GlassPanel(QFrame):
 class StatCard(QFrame):
     """KPI card: icon, label, animated value, subtitle and optional trend."""
 
-    def __init__(self, title: str, value: str = "—”", subtitle: str = "",
+    def __init__(self, title: str, value: str = "—", subtitle: str = "",
                  icon_name: str = "activity", accent: str = "blue",
                  parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -248,8 +248,8 @@ class StatCard(QFrame):
         self.trend.setText(trend)
         self.trend.setVisible(True)
         stripped = trend.strip()
-        kind = ("up" if stripped.startswith("â†‘")
-                else "down" if stripped.startswith("â†“") else "flat")
+        kind = ("up" if stripped.startswith("↑")
+                else "down" if stripped.startswith("↓") else "flat")
         self.trend.setProperty("trend", kind)
         self.trend.style().unpolish(self.trend)
         self.trend.style().polish(self.trend)
@@ -435,7 +435,7 @@ class CheckCard(QFrame):
 class FilterBar(QWidget):
     """Search box bound to a table plus a live visible-row counter."""
 
-    def __init__(self, table, placeholder: str = "Filter rows—¦",
+    def __init__(self, table, placeholder: str = "Filter rows…",
                  parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._table = table

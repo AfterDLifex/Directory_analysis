@@ -91,7 +91,6 @@ class MainWindow(QWidget):
         # pages and the window cannot be shrunk into an unusable shape.
         self.setMinimumSize(self.LAYOUT_SAFE_MIN_SIZE)
         self.resize(self.DEFAULT_SIZE)
-        self._resize_count = 0
 
         self._thread: Optional[QThread] = None
         self._worker: Optional[ScanWorker] = None

@@ -225,9 +225,7 @@ class AnimatedStackedWidget(QStackedWidget):
         self._anim: Optional[QPropertyAnimation] = None
         self._fade_anim: Optional[QPropertyAnimation] = None
         self._pending_index: Optional[int] = None
-        # Keep page layout stable while an animation is in progress so the
-        # visible page cannot shrink/expand mid-transition.
-        self.setAnimation(QStackedWidget.Animation.None_)
+        self._previous_index: int = 0
 
     def setCurrentIndex(self, index: int) -> None:  # noqa: N802
         if index < 0 or index >= self.count():
@@ -240,6 +238,7 @@ class AnimatedStackedWidget(QStackedWidget):
         if self._pending_index is not None:
             return
         self._pending_index = index
+        self._previous_index = previous
 
         # Stop any animation that was in flight.
         if self._anim is not None:
@@ -248,6 +247,12 @@ class AnimatedStackedWidget(QStackedWidget):
         if self._fade_anim is not None:
             self._fade_anim.stop()
             self._fade_anim = None
+
+        # Restore the outgoing page to fully opaque so navigating back to it
+        # later never shows a half-faded (overlapping) page.
+        old = self.currentWidget()
+        if old is not None:
+            old.setGraphicsEffect(None)
 
         # Update the visible page immediately; animation runs on a timer.
         super().setCurrentIndex(index)
@@ -291,9 +296,10 @@ class AnimatedStackedWidget(QStackedWidget):
         fade.start()
         self._fade_anim = fade
 
-        # Slide from a small offset so there's visible movement.
+        # Slide from a small offset so there's visible movement; direction
+        # follows whether we navigated forwards or backwards.
         pos = target.pos()
-        offset = 14
+        offset = 14 if self.currentIndex() > self._previous_index else -14
         slide = QPropertyAnimation(target, b"y", target)
         slide.setDuration(SLOW)
         slide.setStartValue(pos.y() + offset)

@@ -72,7 +72,7 @@ class ExportWorker(QObject):
         self.formats = [f for f in formats if f in FORMATS]
         self.output_dir = output_dir
         self._cancelled = False
-        # Yield to the event loop periodically so the UI stays responsive.
+        # Yield to the GUI periodically so the UI stays responsive.
         self._yield_every = 4
 
     def cancel(self) -> None:
@@ -80,15 +80,16 @@ class ExportWorker(QObject):
         self._cancelled = True
 
     def _yield_to_ui(self, step: int) -> None:
-        """Pump the Qt event loop so pending paint/input events run.
+        """Release the GIL briefly so the GUI thread can repaint.
 
-        Without this the progress overlay never repaints while the worker
-        thread is busy writing large files, making the app appear frozen.
+        The exporters are CPU-bound Python code that holds the GIL for long
+        stretches; without an occasional pause the main thread starves and the
+        progress overlay stops repainting - users perceive that as a frozen
+        export. ``time.sleep`` yields the GIL (``processEvents`` would not,
+        and is not safe to call from a worker thread).
         """
         if step % self._yield_every == 0:
-            from PySide6.QtCore import QCoreApplication
-            QCoreApplication.processEvents(
-                QEventLoop.ProcessEventsFlag.AllEvents, 1)
+            time.sleep(0.004)
 
     # -- worker entry point ------------------------------------------------
 
