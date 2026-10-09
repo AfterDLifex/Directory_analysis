@@ -965,8 +965,21 @@ class ThemeManager(QObject):
         key = f"{self._tokens.key}:{self._tokens.accent}"
         if key == self._applied_key:
             return
+        # ``_applied_key`` is recorded only *after* a successful push.
+        # Recording it first meant a failed _apply() still marked the new
+        # theme as live, so the check above swallowed every retry and the UI
+        # stayed on the previous colours for the rest of the session.
+        try:
+            self._apply()
+        except Exception:
+            # An exception escaping a Qt slot never reaches the caller - Qt
+            # swallows it and only a traceback hits stderr - so the app would
+            # simply look frozen/stale. Report it, leave ``_applied_key``
+            # untouched, and let the next schedule retry the push.
+            import traceback
+            traceback.print_exc()
+            return
         self._applied_key = key
-        self._apply()
         self._schedule_fanout()
 
     def _schedule_fanout(self) -> None:
@@ -997,33 +1010,47 @@ class ThemeManager(QObject):
         as each widget adopts the new rules. Both make the freeze look worse
         than it is, so:
 
-        * repaints are suspended on every visible top-level window for the
+        * repaints are suspended on every visible top-level widget for the
           duration of the push (single repaint at the end);
         * a busy cursor is shown so the user knows something is happening;
         * the stylesheet string is cached, so a switch back to a previously
           used theme skips the formatting pass entirely.
         """
         windows = []
-        try:
-            for w in self._app.topLevelWindows():
-                try:
-                    if w.isVisible():
-                        w.setUpdatesEnabled(False)
-                        windows.append(w)
-                except RuntimeError:
-                    continue
-        except RuntimeError:
-            pass
-
         busy = False
+        # Everything that can leave the window in a "do not repaint" state
+        # lives inside this one ``try`` so the ``finally`` can always undo it.
+        # Previously the suspension loop ran *outside* the restore block: it
+        # iterated ``topLevelWindows()`` (``QWindow`` objects, which have no
+        # ``setUpdatesEnabled``) and raised ``AttributeError`` before the
+        # palette/stylesheet were ever pushed - so a runtime switch silently
+        # did nothing - while any later failure would have left the visible
+        # window permanently un-repaintable (a frozen UI).
         try:
-            from PySide6.QtGui import QGuiApplication
-            QGuiApplication.setOverrideCursor(Qt.CursorShape.BusyCursor)
-            busy = True
-        except Exception:
-            pass
+            # Suspend repaints on the top-level *widgets* (``QWindow`` has no
+            # ``setUpdatesEnabled``; the widget API is what actually gates
+            # painting), so Qt cannot repaint intermediate states as each
+            # widget adopts the new rules - one repaint at the end instead of
+            # hundreds.
+            try:
+                for w in self._app.topLevelWidgets():
+                    try:
+                        if w.isVisible():
+                            w.setUpdatesEnabled(False)
+                            windows.append(w)
+                    except RuntimeError:
+                        # C++ side already destroyed; skip it.
+                        continue
+            except RuntimeError:
+                pass
 
-        try:
+            try:
+                from PySide6.QtGui import QGuiApplication
+                QGuiApplication.setOverrideCursor(Qt.CursorShape.BusyCursor)
+                busy = True
+            except Exception:
+                pass
+
             self._app.setPalette(self._tokens.as_palette())
             self._app.setStyleSheet(_cached_stylesheet(self._tokens))
         finally:
@@ -1033,6 +1060,7 @@ class ThemeManager(QObject):
                     QGuiApplication.restoreOverrideCursor()
                 except Exception:
                     pass
+            # Always hand painting back, even if the push above raised.
             for w in windows:
                 try:
                     w.setUpdatesEnabled(True)
