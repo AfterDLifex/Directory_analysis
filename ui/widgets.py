@@ -20,7 +20,7 @@ from PySide6.QtWidgets import (
 
 from .animations import count_up, reduced_motion
 from .icons import get_category_svg_icon, get_svg_icon, get_svg_pixmap
-from .theme import ThemeManager, ThemeTokens
+from .theme import ThemeManager, ThemeTokens, _blend, _flatten, _hex_to_rgba
 
 
 def tokens() -> ThemeTokens:
@@ -100,6 +100,139 @@ def _subscribe(widget: QWidget, slot: Callable[[ThemeTokens], None]) -> None:
         _enqueue_theme_task(_run)
 
     manager.themeChanged.connect(_on_change)
+
+
+class ThemePreview(QFrame):
+    """Live mock-up of the active theme so style switches feel instant.
+
+    Renders a small, honest slice of the shell - the top bar, a stat card,
+    an input and a run button - entirely from the live token palette. When the
+    user switches a theme from the Settings panel, this preview swaps
+    alongside the rest of the window instead of lingering on the previous look.
+    """
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("ThemePreview")
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(10)
+
+        self._top = QFrame()
+        self._top.setObjectName("ThemePreviewTop")
+        top_lay = QHBoxLayout(self._top)
+        top_lay.setContentsMargins(0, 0, 0, 0)
+        top_lay.setSpacing(8)
+        self._top_title = QLabel("WORKSPACE", self._top)
+        self._top_title.setObjectName("ThemePreviewTitle")
+        self._top_meta = QLabel("Deep engine · storage optimizer", self._top)
+        self._top_meta.setObjectName("ThemePreviewMeta")
+        top_lay.addWidget(self._top_title)
+        top_lay.addWidget(self._top_meta)
+        outer.addWidget(self._top)
+
+        self._body = QFrame()
+        self._body.setObjectName("ThemePreviewBody")
+        body_lay = QVBoxLayout(self._body)
+        body_lay.setContentsMargins(18, 16, 18, 16)
+        body_lay.setSpacing(10)
+
+        self._card = QFrame(self._body)
+        self._card.setObjectName("ThemePreviewCard")
+        card_lay = QVBoxLayout(self._card)
+        card_lay.setContentsMargins(14, 12, 14, 12)
+        card_lay.setSpacing(8)
+        self._card_label = QLabel("STORAGE ANALYTICS", self._card)
+        self._card_label.setObjectName("ThemePreviewCardLabel")
+        self._card_value = QLabel("— / 0 B", self._card)
+        self._card_value.setObjectName("ThemePreviewCardValue")
+        card_lay.addWidget(self._card_label)
+        card_lay.addWidget(self._card_value)
+
+        self._input = QFrame(self._body)
+        self._input.setObjectName("ThemePreviewInput")
+        in_lay = QHBoxLayout(self._input)
+        in_lay.setContentsMargins(0, 0, 0, 0)
+        in_lay.setSpacing(8)
+        self._input_label = QLabel("Path:", self._input)
+        self._input_label.setObjectName("ThemePreviewInputLabel")
+        self._input_field = QLineEdit(self._input)
+        self._input_field.setObjectName("ThemePreviewInputField")
+        self._input_field.setPlaceholderText("/d/SKILL_UP")
+        in_lay.addWidget(self._input_label)
+        in_lay.addWidget(self._input_field, 1)
+
+        self._run = QPushButton("Scan", self._body)
+        self._run.setObjectName("ThemePreviewRun")
+
+        body_lay.addWidget(self._card)
+        body_lay.addWidget(self._input)
+        body_lay.addWidget(self._run)
+        outer.addWidget(self._body)
+
+        self._subscribe()
+
+    def _subscribe(self) -> None:
+        manager = ThemeManager.instance()
+
+        def _refresh() -> None:
+            self.update_from_tokens(manager.tokens)
+
+        manager.themeChanged.connect(_refresh)
+        _refresh()
+
+    def update_from_tokens(self, t: ThemeTokens) -> None:
+        flat = _flatten(t.chrome)
+        bright = _blend(flat, t.bg_3)
+        self._top.setStyleSheet(
+            f"background: qlineargradient(x1:0, y1:0, x2:0, y2:1, "
+            f"stop:0 {flat}, stop:1 {bright});\n"
+            f"border-bottom: 1px solid {t.border};"
+        )
+        self._top_title.setStyleSheet(
+            f"color: {t.text_strong}; font-size: {t.fs_title}px; font-weight: 700;"
+        )
+        self._top_meta.setStyleSheet(
+            f"color: {t.text_dim}; font-size: {t.fs_small}px;"
+        )
+        self._body.setStyleSheet(f"background: {t.surface_alt};")
+        self._card.setStyleSheet(
+            f"background: qlineargradient(x1:0, y1:0, x2:0, y2:1, "
+            f"stop:0 {_hex_to_rgba(t.surface, 0.95)}, "
+            f"stop:1 {_hex_to_rgba(t.surface_alt, 0.9)});\n"
+            f"border: 1px solid {t.border}; "
+            f"border-radius: {t.radius_md + 2}px;"
+        )
+        self._card_label.setStyleSheet(
+            f"color: {t.text_faint}; font-size: {t.fs_micro}px; "
+            f"font-weight: 700; letter-spacing: 0.1em;"
+        )
+        self._card_value.setStyleSheet(
+            f"color: {t.text_strong}; font-size: 15px; font-weight: 700;"
+        )
+        self._input.setStyleSheet(
+            f"background: {t.surface_input}; border: 1px solid {t.border}; "
+            f"border-radius: {t.radius_sm}px; padding: 7px 12px;"
+        )
+        self._input_label.setStyleSheet(
+            f"color: {t.text_dim}; font-size: {t.fs_small}px;"
+        )
+        self._input_field.setStyleSheet(
+            f"background: {t.surface_input}; color: {t.text}; "
+            f"border: 1px solid {t.border}; "
+            f"border-radius: {t.radius_sm}px; padding: 7px 12px; "
+            f"font-size: {t.fs_small}px;"
+        )
+        self._run.setStyleSheet(
+            f"background: {t.accent}; color: {t.accent_text}; "
+            f"border: none; border-radius: {t.radius_sm}px; padding: 7px 12px; "
+            f"font-size: {t.fs_body}px; font-weight: 600;"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Labels & chips
+# ---------------------------------------------------------------------------
 
 
 # ---------------------------------------------------------------------------

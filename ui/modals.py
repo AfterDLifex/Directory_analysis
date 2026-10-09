@@ -30,6 +30,7 @@ from .animations import (
     FAST, NORMAL, SLOW, fade_in, fade_out, pop_in, reduced_motion,
 )
 from .icons import get_svg_icon, get_svg_pixmap
+from .shortcuts import SHORTCUT_SECTIONS
 from .theme import ThemeManager, ThemeTokens
 
 
@@ -425,29 +426,6 @@ class ExportOverlay(OverlayHost):
 class ShortcutsOverlay(OverlayHost):
     """Keyboard-shortcut reference, rendered as key caps."""
 
-    SECTIONS = [
-        ("Navigation", [
-            ("Ctrl + 1…9", "Jump straight to a page"),
-            ("Ctrl + O", "Choose a folder to analyze"),
-            ("?", "Show this shortcut sheet"),
-            ("Esc", "Cancel a running scan / close an overlay"),
-        ]),
-        ("Analysis", [
-            ("F5", "Start or restart a scan"),
-            ("Ctrl + R", "Rescan the current folder"),
-            ("Ctrl + L", "Focus the folder path field"),
-        ]),
-        ("Reports", [
-            ("Ctrl + E", "Open the Reports page"),
-            ("Ctrl + S", "Export the selected formats"),
-            ("Ctrl + Shift + O", "Open the last export folder"),
-        ]),
-        ("Appearance", [
-            ("Ctrl + T", "Toggle light / dark theme"),
-            ("Ctrl + ,", "Open Settings"),
-        ]),
-    ]
-
     def __init__(self, parent: QWidget) -> None:
         super().__init__(parent)
 
@@ -462,7 +440,7 @@ class ShortcutsOverlay(OverlayHost):
         grid = QGridLayout()
         grid.setHorizontalSpacing(18)
         grid.setVerticalSpacing(7)
-        for col, (section, items) in enumerate(self.SECTIONS):
+        for col, (section, items) in enumerate(SHORTCUT_SECTIONS):
             header = QLabel(section.upper())
             header.setObjectName("SectionTitle")
             grid.addWidget(header, 0, col * 2)

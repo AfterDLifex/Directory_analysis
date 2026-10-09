@@ -34,7 +34,8 @@ from .icons import get_category_svg_icon, get_svg_icon, get_svg_pixmap
 from .theme import ACCENTS, DENSITIES, THEMES, ThemeManager, ThemeTokens
 from .widgets import (
     CheckCard, EmptyState, FilterBar, GlassPanel, InsightCard, Pill,
-    SectionHeader, SegmentedControl, StatCard, fill_table, file_row, make_table,
+    SectionHeader, SegmentedControl, StatCard, ThemePreview,
+    fill_table, file_row, make_table,
     section_rows, tokens,
 )
 
@@ -1344,7 +1345,6 @@ class SettingsPage(Page):
         root.addWidget(self._build_analysis())
         root.addWidget(self._build_limits())
         root.addWidget(self._build_about())
-
     # -- sections ----------------------------------------------------------
 
     def _build_appearance(self) -> GlassPanel:
@@ -1355,24 +1355,30 @@ class SettingsPage(Page):
         grid = QGridLayout()
         grid.setSpacing(10)
 
-        grid.addWidget(self._field_label("Theme"), 0, 0)
-        self.theme_control = SegmentedControl(
-            [THEMES[k].name for k in THEMES], THEMES[self.manager.tokens.key].name)
-        self.theme_by_name = {v.name: k for k, v in THEMES.items()}
-        self.theme_control.changed.connect(self._on_theme_picked)
-        grid.addWidget(self.theme_control, 0, 1)
+        # Live preview of the active theme - the moment a picker changes, the
+        # shell redraws around it instead of waiting for the next repaint.
+        self.theme_preview = ThemePreview()
+        grid.addWidget(self.theme_preview, 0, 0, 1, 4)
 
-        grid.addWidget(self._field_label("Accent"), 1, 0)
+        grid.addWidget(self._field_label("Theme"), 1, 0)
+        self.theme_swatches: Dict[str, _ThemeSwatch] = {}
+        for idx, (key, tok) in enumerate(THEMES.items()):
+            swatch = _ThemeSwatch(key, tok, key == self.manager.tokens.key)
+            swatch.clicked.connect(lambda k=key: self._on_theme_picked(k))
+            self.theme_swatches[key] = swatch
+            grid.addWidget(swatch, 1 + (idx // 3), 1 + (idx % 3))
+
+        grid.addWidget(self._field_label("Accent"), 3, 0)
         self.accent_control = SegmentedControl(list(ACCENTS), "Blue")
         self.accent_control.changed.connect(
             lambda name: self.manager.set_accent(ACCENTS[name]))
-        grid.addWidget(self.accent_control, 1, 1)
+        grid.addWidget(self.accent_control, 3, 1)
 
-        grid.addWidget(self._field_label("Density"), 2, 0)
+        grid.addWidget(self._field_label("Density"), 4, 0)
         self.density_control = SegmentedControl(list(DENSITIES),
                                                 self.manager.density)
         self.density_control.changed.connect(self.manager.set_density)
-        grid.addWidget(self.density_control, 2, 1)
+        grid.addWidget(self.density_control, 4, 1)
         panel.body.addLayout(grid)
 
         reset = QPushButton("Reset appearance")
@@ -1491,8 +1497,7 @@ class SettingsPage(Page):
     def _set_config_field(self, field: str, value: Any) -> None:
         setattr(self._config(), field, value)
 
-    def _on_theme_picked(self, name: str) -> None:
-        key = self.theme_by_name.get(name)
+    def _on_theme_picked(self, key: str) -> None:
         if key:
             self.manager.set_theme(key)
 
@@ -1517,3 +1522,42 @@ class SettingsPage(Page):
             spin.blockSignals(True)
             spin.setValue(int(getattr(config, field, spin.minimum())))
             spin.blockSignals(False)
+class _ThemeSwatch(QFrame):
+    """A clickable preview card for one theme."""
+
+    clicked = Signal()
+
+    def __init__(self, key: str, tok: ThemeTokens, selected: bool,
+                 parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.key = key
+        self.setObjectName("Swatch")
+        self.setProperty("state", "selected" if selected else "")
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(8, 8, 8, 8)
+        lay.setSpacing(6)
+
+        preview = QLabel()
+        preview.setFixedHeight(38)
+        preview.setStyleSheet(
+            f"border-radius: 8px;\n"
+            f"background: qlineargradient(x1:0, y1:0, x2:1, y2:1,\n"
+            f"    stop:0 {tok.bg_1}, stop:1 {tok.bg_2});\n"
+            f"border: 1px solid {tok.border_strong};"
+        )
+        lay.addWidget(preview)
+
+        name = QLabel(tok.name)
+        name.setStyleSheet(
+            f"color: {tok.text_strong}; font-size: 11px; font-weight: 700;"
+        )
+        name.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lay.addWidget(name)
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit()
+        super().mousePressEvent(event)
+
+

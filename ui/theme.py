@@ -104,6 +104,7 @@ class ThemeTokens:
     key: str
     name: str
     dark: bool = True
+    density: str = "Comfortable"
 
     # root background gradient stops
     bg_1: str = "#070b13"
@@ -158,6 +159,9 @@ class ThemeTokens:
     def with_accent(self, hex_color: str) -> "ThemeTokens":
         """Return a copy of this theme tinted with ``hex_color``."""
         return replace(self, accent=hex_color)
+    def with_density(self, name: str) -> "ThemeTokens":
+        """Return a copy of this theme at a new density."""
+        return replace(self, density=name)
 
     def as_palette(self) -> QPalette:
         """Native palette so popups and dialogs inherit the theme colours."""
@@ -914,12 +918,19 @@ class ThemeManager(QObject):
         self._schedule_apply()
 
     def set_density(self, name: str) -> None:
+        if name not in DENSITIES:
+            raise ValueError(f"Unknown density: {name}")
+        if self._tokens.density == name:
+            return
         self._settings.setValue("density", name)
+        self._tokens = self._tokens.with_density(name)
         self.densityChanged.emit(name)
+        self._schedule_apply()
 
     def reset_appearance(self) -> None:
         self._settings.remove("accent")
         self._settings.remove("density")
+        self._tokens = self._tokens.with_density("Comfortable")
         self.set_theme(DEFAULT_THEME)
 
     # -- application -------------------------------------------------------
@@ -928,7 +939,9 @@ class ThemeManager(QObject):
         key = str(self._settings.value("theme", DEFAULT_THEME))
         tokens = THEMES.get(key, THEMES[DEFAULT_THEME])
         accent = str(self._settings.value("accent", "") or tokens.accent)
-        self._tokens = tokens.with_accent(accent)
+        density = str(self._settings.value("density", "Comfortable"))
+        density = density if density in DENSITIES else "Comfortable"
+        self._tokens = tokens.with_accent(accent).with_density(density)
         # Apply synchronously at startup: the first stylesheet push is
         # dominated by initial layout, not by the switch itself.
         self._do_apply()
