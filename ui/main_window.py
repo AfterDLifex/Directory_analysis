@@ -137,10 +137,11 @@ class MainWindow(QWidget):
         finally:
             self.setUpdatesEnabled(True)
 
-        # Size is set *after* the widget tree exists so no early resize
-        # event races the theme application.
+        # --- size: set AFTER construction so the layout calculates the
+        # correct final dimensions (avoids resize flicker during launch) ---
         self.setMinimumSize(self.LAYOUT_SAFE_MIN_SIZE)
         self.resize(self.DEFAULT_SIZE)
+        self.setMaximumSize(self.DEFAULT_SIZE)
 
     # ------------------------------------------------------------------
     # Construction
@@ -827,18 +828,18 @@ class MainWindow(QWidget):
     # ------------------------------------------------------------------
 
     def show(self) -> None:  # noqa: D401
-        """Present the window, making sure the theme and size are settled.
+        """Present the window, making sure the theme is settled before paint.
 
-        On the first call we push the theme synchronously (a no-op if it was
-        already applied at startup) and pin the size. Doing this *before*
-        ``super().show()`` means the very first frame the user sees is
-        already fully themed, at the correct dimensions - which fixes the
-        brief "blink and resize" that was visible on PyInstaller launches.
+        The size is already fixed in ``__init__()`` (minimum + maximum pinned
+        to ``DEFAULT_SIZE``), so we only apply the theme synchronously on the
+        first show.  Doing this *before* ``super().show()`` means the very
+        first frame the user sees is already fully themed at the correct
+        dimensions - which fixes the brief "blink and resize" that was
+        visible on PyInstaller launches.
         """
         if not self._ready_to_show:
             self._ready_to_show = True
             self._apply_theme_now()
-            self.resize(self.DEFAULT_SIZE)
         super().show()
 
     def _apply_theme_now(self) -> None:
