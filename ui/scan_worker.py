@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import time
+
 from PySide6.QtCore import QObject, Signal
 
 from folder_analyzer import FolderAnalyzer, FolderScanner
@@ -19,9 +21,12 @@ class ScanWorker(QObject):
         self.config = config
         self._scanner: FolderScanner | None = None
         self._cancelled = False
+        self._last_progress_at = 0.0
+        self._progress_interval = 0.10
 
     def run(self) -> None:
         try:
+            self._last_progress_at = 0.0
             scanner = FolderScanner(
                 self.config.folder_path,
                 include_hidden=self.config.include_hidden,
@@ -53,5 +58,14 @@ class ScanWorker(QObject):
             self._scanner.stop()
 
     def _on_progress(self, files: int, dirs: int) -> None:
-        if not self._cancelled:
-            self.progressChanged.emit(files, dirs)
+        if self._cancelled:
+            return
+        # FolderScanner calls us for every directory.  Queuing every one of
+        # those cross-thread signals can overwhelm Qt's main-event queue on a
+        # large project, starving repaint/input even though scanning itself is
+        # correctly off the GUI thread.
+        now = time.monotonic()
+        if now - self._last_progress_at < self._progress_interval:
+            return
+        self._last_progress_at = now
+        self.progressChanged.emit(files, dirs)

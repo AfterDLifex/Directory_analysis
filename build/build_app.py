@@ -4,12 +4,12 @@ Cross-platform build helper: produce a standalone executable.
 
 Usage (from the project root or anywhere):
 
-    python build/build_app.py                 # single-file, windowed
-    python build/build_app.py --onedir        # faster-start folder build
+    python build/build_app.py                 # fast-start folder build
+    python build/build_app.py --onefile       # portable single executable
     python build/build_app.py --console       # keep a console for debugging
 
-Works on Windows, macOS and Linux; the output lands in ``dist/`` and is
-named ``FolderAnalysisPro`` (``.exe`` on Windows).
+Works on Windows, macOS and Linux; the output lands in ``dist/``. The default
+is a ``FolderAnalysisPro`` application folder (``.exe`` inside it on Windows).
 """
 
 from __future__ import annotations
@@ -84,17 +84,19 @@ def _remove_with_retry(path: str, attempts: int = 5, delay: float = 1.0) -> bool
     return False
 
 
-def _pre_clean(root: str) -> None:
+def _pre_clean(root: str, onedir: bool) -> bool:
     """Remove stale build artefacts before PyInstaller runs.
 
-    On Windows, antivirus scanners can keep a just-written ``.exe`` locked for
-    a few seconds, which makes PyInstaller's own ``--clean`` step crash with
-    ``PermissionError``.  Deleting (or, as a last resort, renaming aside) the
-    artefacts up front avoids that.
+    On Windows, antivirus scanners or a still-running previous build can keep
+    a DLL locked.  PyInstaller otherwise fails much later while assembling
+    ``COLLECT`` with an unhelpful ``WinError 32``.
     """
     stale = [
         os.path.join(root, "build", APP_NAME),
-        os.path.join(root, "dist", APP_NAME + (".exe" if os.name == "nt" else "")),
+        os.path.join(
+            root, "dist", APP_NAME if onedir
+            else APP_NAME + (".exe" if os.name == "nt" else ""),
+        ),
     ]
     for path in stale:
         if not os.path.exists(path):
@@ -102,16 +104,16 @@ def _pre_clean(root: str) -> None:
         if _remove_with_retry(path):
             print(f"Removed stale artefact: {path}")
         else:
-            aside = path + ".stale-%d" % int(time.time())
-            try:
-                os.rename(path, aside)
-                print(f"Locked file moved aside: {path} -> {aside}")
-            except OSError as exc:
-                print(f"WARNING: could not clear {path} ({exc}); "
-                      "the build may fail on a locked file.")
+            print(
+                f"ERROR: could not remove locked build artefact: {path}\n"
+                "Close FolderAnalysisPro (and any Explorer preview window), "
+                "then run the build again."
+            )
+            return False
+    return True
 
 
-def build(onedir: bool = False, console: bool = False, keep_workpath: bool = False) -> int:
+def build(onedir: bool = True, console: bool = False, keep_workpath: bool = False) -> int:
     """Invoke PyInstaller with the right flags for this platform."""
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     os.chdir(root)
@@ -120,7 +122,8 @@ def build(onedir: bool = False, console: bool = False, keep_workpath: bool = Fal
         print("PyInstaller is not installed.  Run:  pip install pyinstaller")
         return 1
 
-    _pre_clean(root)
+    if not _pre_clean(root, onedir):
+        return 1
 
     cmd = [sys.executable, "-m", "PyInstaller", "--noconfirm"]
     if not keep_workpath:
@@ -152,7 +155,8 @@ def build(onedir: bool = False, console: bool = False, keep_workpath: bool = Fal
         return completed.returncode
 
     suffix = ".exe" if platform.system() == "Windows" else ""
-    output = os.path.join("dist", APP_NAME + suffix)
+    output = (os.path.join("dist", APP_NAME, APP_NAME + suffix)
+              if onedir else os.path.join("dist", APP_NAME + suffix))
     size = os.path.getsize(output) / (1024 * 1024) if os.path.exists(output) else 0
     print(f"\nDone: {output}" + (f"  ({size:.1f} MB)" if size else ""))
     if not onedir:
@@ -174,8 +178,12 @@ def _module_missing() -> bool:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Build the FolderAnalysisPro executable.")
-    parser.add_argument("--onedir", action="store_true",
-                        help="Build an application folder instead of a single file.")
+    layout = parser.add_mutually_exclusive_group()
+    layout.add_argument("--onedir", dest="onedir", action="store_true",
+                        help="Build an application folder (the default).")
+    layout.add_argument("--onefile", dest="onedir", action="store_false",
+                        help="Build one portable executable; it starts more slowly.")
+    parser.set_defaults(onedir=True)
     parser.add_argument("--console", action="store_true",
                         help="Keep the console window (useful for debugging).")
     parser.add_argument("--keep-workpath", action="store_true",

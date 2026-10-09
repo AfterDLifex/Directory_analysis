@@ -12,8 +12,9 @@ Usage:
     python main.py                 # launch the GUI
     python -m folder_analyzer -p <folder> --formats all   # headless CLI
 
-Packaging (single-file executable):
-    python build/build_app.py      # -> dist/FolderAnalysisPro(.exe)
+Packaging (fast-start application folder):
+    python build/build_app.py      # -> dist/FolderAnalysisPro/
+    python build/build_app.py --onefile  # -> dist/FolderAnalysisPro(.exe)
 
 Author: AfterDLifex
 Version: 3.0.0
@@ -59,7 +60,10 @@ def main() -> int:
     app.setWindowIcon(QIcon(pixmap))
 
     window = MainWindow()
-    window.show()
+    # Present at its final desktop size.  ``show_maximized`` prepares the
+    # stylesheet before exposing a native window, avoiding the visible
+    # normal-size -> maximized resize during startup.
+    window.show_maximized()
     return app.exec()
 
 

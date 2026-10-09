@@ -106,12 +106,11 @@ class MainWindow(QWidget):
         self._row_for_key: Dict[str, int] = {}
         self._key_for_row: Dict[int, str] = {}
 
-        # Chart pages to rebuild after a theme change, one per event-loop
-        # turn so the window never blocks on both rebuilds at once. The
-        # ``_active`` flag makes the pump idempotent, so a second theme
-        # change landing mid-rebuild cannot spawn a second pump loop.
-        self._chart_rebuild_queue: List[str] = []
-        self._chart_rebuild_active = False
+        # A scan result can fill many tables and create charts.  Rendering
+        # all ten pages from the worker's finished signal monopolises the GUI
+        # thread, so pages are hydrated one event-loop turn at a time.
+        self._result_render_queue: List[str] = []
+        self._result_render_active = False
 
         self.manager: Optional[ThemeManager] = None
         # Guards the one-shot work done in the first ``show()`` call.
@@ -141,7 +140,6 @@ class MainWindow(QWidget):
         # correct final dimensions (avoids resize flicker during launch) ---
         self.setMinimumSize(self.LAYOUT_SAFE_MIN_SIZE)
         self.resize(self.DEFAULT_SIZE)
-        self.setMaximumSize(self.DEFAULT_SIZE)
 
     # ------------------------------------------------------------------
     # Construction
@@ -404,6 +402,7 @@ class MainWindow(QWidget):
     def _switch_stack(self, page_index: int, key: str) -> None:
         """Perform the actual stack switch and emit pageChanged."""
         self.stack.setCurrentIndex(page_index)
+        self._render_result_page_now(key)
         self.pageChanged.emit(key)
 
     def _goto(self, key: str) -> None:
@@ -463,6 +462,17 @@ class MainWindow(QWidget):
         self._worker.finished.connect(self._on_finished)
         self._worker.failed.connect(self._on_failed)
         self._worker.cancelled.connect(self._on_cancelled)
+        # The worker owns the long-running call.  Let it stop its own event
+        # loop and release the QThread asynchronously; waiting in a GUI slot
+        # is a short but noticeable application freeze after every scan.
+        self._worker.finished.connect(self._thread.quit)
+        self._worker.failed.connect(self._thread.quit)
+        self._worker.cancelled.connect(self._thread.quit)
+        self._worker.finished.connect(self._worker.deleteLater)
+        self._worker.failed.connect(self._worker.deleteLater)
+        self._worker.cancelled.connect(self._worker.deleteLater)
+        self._thread.finished.connect(self._on_scan_thread_finished)
+        self._thread.finished.connect(self._thread.deleteLater)
         self._thread.start()
 
     def cancel_scan(self) -> None:
@@ -479,8 +489,6 @@ class MainWindow(QWidget):
 
     def _on_finished(self, result: AnalysisResult) -> None:
         self._result = result
-        for page in self._pages.values():
-            page.set_result(result)
 
         summary = (
             f"{result.root_name}: {result.total_files:,} files · "
@@ -507,15 +515,14 @@ class MainWindow(QWidget):
             self._toasts.show("Scan complete — storage looks healthy.",
                               "success")
 
-        self._teardown_worker()
         self._set_busy(False)
         self.progress.setVisible(False)
+        self._queue_result_render()
 
     def _on_failed(self, message: str) -> None:
         self._set_status("error", "cancel", f"Scan failed: {message}")
         self.status_meta.setText("")
         self._toasts.show(f"Scan failed: {message}", "error")
-        self._teardown_worker()
         self._set_busy(False)
         self.progress.setVisible(False)
 
@@ -523,12 +530,11 @@ class MainWindow(QWidget):
         self._set_status("warn", "warning", "Scan cancelled by user.")
         self.status_meta.setText("")
         self._toasts.show("Scan cancelled.", "warning")
-        self._teardown_worker()
         self._set_busy(False)
         self.progress.setVisible(False)
 
     def _teardown_worker(self) -> None:
-        """Stop and release the scan thread, tolerating a slow shutdown."""
+        """Stop a scan only during shutdown; normal cleanup is async."""
         if self._thread is not None:
             self._thread.quit()
             self._thread.wait(3000)
@@ -540,6 +546,41 @@ class MainWindow(QWidget):
         self._worker = None
         self.progress.setRange(0, 1)
         self.progress.setValue(0)
+
+    def _on_scan_thread_finished(self) -> None:
+        """Drop completed scan-thread references without blocking the UI."""
+        self._worker = None
+        self._thread = None
+
+    def _queue_result_render(self) -> None:
+        """Populate result pages incrementally, prioritising the visible one."""
+        current = self._key_for_row.get(self.nav.currentRow(), "overview")
+        self._result_render_queue = [current] + [
+            key for key in PAGE_KEYS if key != current
+        ]
+        if not self._result_render_active:
+            self._result_render_active = True
+            QTimer.singleShot(0, self, self._render_next_result_page)
+
+    def _render_result_page_now(self, key: str) -> None:
+        """Render a selected page immediately if its result update is pending."""
+        if self._result is None or key not in self._result_render_queue:
+            return
+        self._result_render_queue.remove(key)
+        self._pages[key].set_result(self._result)
+
+    def _render_next_result_page(self) -> None:
+        if self._result is None or not self._result_render_queue:
+            self._result_render_active = False
+            return
+        key = self._result_render_queue.pop(0)
+        self._pages[key].set_result(self._result)
+        if self._result_render_queue:
+            # A small gap gives Qt a chance to paint and handle input before
+            # the next table/chart is populated.
+            QTimer.singleShot(16, self, self._render_next_result_page)
+        else:
+            self._result_render_active = False
 
     def _set_busy(self, busy: bool) -> None:
         self.analyze_btn.setEnabled(not busy)
@@ -602,6 +643,12 @@ class MainWindow(QWidget):
         self._export_worker.stageFailed.connect(self._on_export_stage_failed)
         self._export_worker.completed.connect(self._on_export_done)
         self._export_worker.failed.connect(self._on_export_failed)
+        self._export_worker.completed.connect(self._export_thread.quit)
+        self._export_worker.failed.connect(self._export_thread.quit)
+        self._export_worker.completed.connect(self._export_worker.deleteLater)
+        self._export_worker.failed.connect(self._export_worker.deleteLater)
+        self._export_thread.finished.connect(self._on_export_thread_finished)
+        self._export_thread.finished.connect(self._export_thread.deleteLater)
         self._export_thread.start()
 
     def _on_export_stage_failed(self, index: int, detail: str) -> None:
@@ -614,8 +661,6 @@ class MainWindow(QWidget):
             output_dir, written, failed=self._export_failed)
         self._set_export_busy(False)
         self._last_export_dir = output_dir
-        self._teardown_export()
-
         self._pages["reports"].report_done(written, output_dir)
         self._toasts.show(
             f"Exported {len(written)} report(s) to "
@@ -625,7 +670,6 @@ class MainWindow(QWidget):
     def _on_export_failed(self, message: str) -> None:
         self.export_overlay.fail(message)
         self._set_export_busy(False)
-        self._teardown_export()
         self._pages["reports"].report_failed(message)
         self._toasts.show(f"Export failed: {message}", "error")
 
@@ -634,7 +678,7 @@ class MainWindow(QWidget):
         self.export_btn_top.setEnabled(not busy)
 
     def _teardown_export(self) -> None:
-        """Release the export thread; safe to call when nothing runs."""
+        """Stop an export only during shutdown; normal cleanup is async."""
         if self._export_thread is not None:
             self._export_thread.quit()
             self._export_thread.wait(3000)
@@ -644,6 +688,11 @@ class MainWindow(QWidget):
             self._export_thread.deleteLater()
         self._export_thread = None
         self._export_worker = None
+
+    def _on_export_thread_finished(self) -> None:
+        """Drop completed export-thread references without blocking the UI."""
+        self._export_worker = None
+        self._export_thread = None
 
     def _cancel_export(self) -> None:
         """Request cancellation of the running export."""
@@ -783,45 +832,24 @@ class MainWindow(QWidget):
         """Re-render theme-dependent visuals after a theme/accent switch.
 
         QtCharts colours are drawn by the charts themselves, outside the reach
-        of QSS, so the chart pages must be rebuilt from the stored result.
-        That rebuild costs ~200ms per page (8 charts), so it is chunked:
-        the icon updates now, then one chart page rebuilds per event-loop
-        turn. The window repaints the new stylesheet in between and stays
-        responsive instead of freezing while both pages rebuild back-to-back.
-
-        The queue is deliberately append-only with a single active pump, so a
-        second theme change arriving mid-rebuild extends the existing queue
-        rather than spawning a second pump loop that races the first.
+        of QSS. Hidden views are marked dirty and rebuilt lazily when opened;
+        only a chart page the user is currently viewing is rebuilt now.
         """
         icon = "sun" if not tokens_obj.dark else "moon"
         color = tokens_obj.text_dim
         self.theme_btn.setIcon(get_svg_icon(icon, color=color, size=16))
 
-        if self._result is None or not self._result.has_data:
-            for key in ("charts", "timeline"):
-                self._pages[key].set_empty()
-            return
-
+        # Chart construction is the heaviest theme-dependent operation.  A
+        # hidden page's ChartView records the dirty state without building;
+        # rebuild only the visible chart page now and leave the other lazy.
+        current = self._key_for_row.get(self.nav.currentRow(), "overview")
         for key in ("charts", "timeline"):
-            if key not in self._chart_rebuild_queue:
-                self._chart_rebuild_queue.append(key)
-        if not self._chart_rebuild_active:
-            self._chart_rebuild_active = True
-            QTimer.singleShot(16, self, self._rebuild_next_chart_page)
-
-    def _rebuild_next_chart_page(self) -> None:
-        """Rebuild one queued chart page, then yield so the UI can paint."""
-        if not self._chart_rebuild_queue or self._result is None:
-            self._chart_rebuild_active = False
-            self._chart_rebuild_queue.clear()
-            return
-        key = self._chart_rebuild_queue.pop(0)
-        if self._result.has_data:
-            self._pages[key].set_result(self._result)
-        if self._chart_rebuild_queue:
-            QTimer.singleShot(16, self, self._rebuild_next_chart_page)
-        else:
-            self._chart_rebuild_active = False
+            if self._result is None or not self._result.has_data:
+                self._pages[key].set_empty()
+            elif key == current:
+                self._pages[key].set_result(self._result)
+            else:
+                self._pages[key].set_empty()
 
     # ------------------------------------------------------------------
     # Window events
@@ -830,8 +858,8 @@ class MainWindow(QWidget):
     def show(self) -> None:  # noqa: D401
         """Present the window, making sure the theme is settled before paint.
 
-        The size is already fixed in ``__init__()`` (minimum + maximum pinned
-        to ``DEFAULT_SIZE``), so we only apply the theme synchronously on the
+        The initial size is calculated in ``__init__()``, so we only apply the
+        theme synchronously on the
         first show.  Doing this *before* ``super().show()`` means the very
         first frame the user sees is already fully themed at the correct
         dimensions - which fixes the brief "blink and resize" that was
@@ -841,6 +869,19 @@ class MainWindow(QWidget):
             self._ready_to_show = True
             self._apply_theme_now()
         super().show()
+
+    def show_maximized(self) -> None:
+        """Show the fully prepared shell at the usable desktop size.
+
+        ``QWidget.showMaximized()`` does not pass through this class's
+        :meth:`show` override.  Preparing explicitly here keeps the first
+        exposed frame themed and fully laid out, instead of showing the
+        1400x900 construction size and then resizing it to maximized.
+        """
+        if not self._ready_to_show:
+            self._ready_to_show = True
+            self._apply_theme_now()
+        super().showMaximized()
 
     def _apply_theme_now(self) -> None:
         """Push the current theme synchronously, if the manager supports it.

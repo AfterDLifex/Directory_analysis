@@ -1026,10 +1026,10 @@ class ThemeManager(QObject):
                     w.update()
                 except RuntimeError:
                     continue
-        # Dynamic-property widgets ([state="..."], severity chips, status
-        # dots) need an explicit repolish; do it chunked on the event loop
-        # so it never blocks a single frame.
-        _schedule_repolish(self._app)
+        # Applying an application stylesheet already repolishes the widget
+        # tree.  Walking ``allWidgets()`` and repolishing a second time made
+        # every theme change do the same expensive work twice.  Callers that
+        # alter a dynamic property still repolish that individual widget.
 
 
 # ---------------------------------------------------------------------------

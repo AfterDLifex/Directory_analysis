@@ -28,6 +28,33 @@ def tokens() -> ThemeTokens:
     return ThemeManager.current()
 
 
+# Theme listeners are deliberately drained in small batches.  Scheduling one
+# ``singleShot(0, ...)`` per icon/card merely moves all the work into the same
+# subsequent event-loop turn, which still feels like a freeze.
+_THEME_TASKS: list[Callable[[], None]] = []
+_THEME_PUMP_ACTIVE = False
+_THEME_TASK_BATCH = 8
+
+
+def _enqueue_theme_task(task: Callable[[], None]) -> None:
+    global _THEME_PUMP_ACTIVE
+    _THEME_TASKS.append(task)
+    if _THEME_PUMP_ACTIVE:
+        return
+    _THEME_PUMP_ACTIVE = True
+    QTimer.singleShot(0, _drain_theme_tasks)
+
+
+def _drain_theme_tasks() -> None:
+    global _THEME_PUMP_ACTIVE
+    for _ in range(min(_THEME_TASK_BATCH, len(_THEME_TASKS))):
+        _THEME_TASKS.pop(0)()
+    if _THEME_TASKS:
+        QTimer.singleShot(16, _drain_theme_tasks)
+    else:
+        _THEME_PUMP_ACTIVE = False
+
+
 def _subscribe(widget: QWidget, slot: Callable[[ThemeTokens], None]) -> None:
     """Call ``slot`` now and on every theme change, until ``widget`` dies.
 
@@ -70,7 +97,7 @@ def _subscribe(widget: QWidget, slot: Callable[[ThemeTokens], None]) -> None:
                 except (RuntimeError, TypeError):
                     pass
 
-        QTimer.singleShot(0, _run)
+        _enqueue_theme_task(_run)
 
     manager.themeChanged.connect(_on_change)
 

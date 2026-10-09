@@ -59,10 +59,10 @@ python -m folder_analyzer --help
 
 ```bash
 pip install pyinstaller
-python build/build_app.py            # -> dist/FolderAnalysisPro(.exe)
+python build/build_app.py            # -> dist/FolderAnalysisPro/ (faster startup)
 ```
 
-Options: `--onedir` (faster-start folder build), `--console` (keep a console
+Options: `--onefile` (portable single executable; slower startup), `--console` (keep a console
 window for debugging). A PyInstaller spec file is also provided:
 
 ```bash
